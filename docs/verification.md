@@ -2,15 +2,19 @@
 
 ## Current work: 0.2.0-preview
 
-The source-driven visual parity revision integrates Weather, Radar, compact/full ensemble and settings surfaces. The complete app and test APKs compile; Android lint reports **0 errors and 32 warnings**. All **50 instrumentation scenarios compile**, but the current revision has not yet run on a device. Rendered comparisons with the mobile website remain pending. No exact-visual-match or runtime-pass claim is made for this revision.
+The source-driven visual parity revision integrates Weather, Radar, compact/full ensemble and settings surfaces. The complete app and test APKs compile; Android lint reports **0 errors and 31 warnings**. All **53 instrumentation scenarios compile**, but the current revision has not yet run on a device. Rendered comparisons with the mobile website remain pending. No exact-visual-match or runtime-pass claim is made for this revision.
 
-The debug APK has version code 3, minimum API 26 and target API 35. Its v2 signature, 16 KB ZIP alignment and arm64 native-library alignment were verified. It uses the same development signer as the earlier previews, allowing an in-place update. APK size: 62,623,331 bytes. SHA-256:
+The debug APK has version code 3, minimum API 26 and target API 35. Candidate signature and 16 KB ZIP/native-library alignment checks are pending. The configured development signer is unchanged from the earlier previews. Correction-candidate APK size: 62,625,687 bytes. SHA-256:
 
 ```
-18ca9cc0714cc9e65cfc02c7a6b8a52366351831e023f3682179629afb19bf32
+0867eb11c452b728c88223b0296371e97773882b3cda5759b60a2e4136df2a4f
 ```
 
 This APK is held for rendered review, not a validated replacement for the delivered preview. The known working API 27 AOSP emulator is being used for that review. Its earlier 0.1.1-preview run passed two real-Activity tests: cached Weather/search close-reopen and the synthetic five-phase minute strip, with clean screenshots. An execution interruption ended that process; its AVD was preserved and restarted without wiping.
+
+The first published 0.2.0 revision (`7e31ed1`) passed hosted build/lint. Its accelerated API 35 suite reached 40 of 50 cases, with three plume lookup failures and a foreground-service startup crash during rapid Rain watch cancellation/restart. The working correction adds an admitted-start lifecycle guard and prompt foreground promotion, fixes offscreen lazy-list test searches, and adds regressions. This corrected revision still requires its own complete API 35 run.
+
+Two 0.2.0 API 27 Weather checks passed (dry imminent-panel absence and typed minute strip), as did full-plume controls and independent unit/theme persistence. These precede the correction candidate. A launch that unexpectedly scrolled to the spiral was reproduced and is now guarded by a pre-interaction hero assertion; touch-mode charts no longer acquire keyboard focus. The candidate's fresh-launch and visual results remain pending.
 
 The sections below describe historical 0.1.x checks. A compiled test APK is not a test pass.
 
@@ -40,17 +44,17 @@ This is a development-signed preview, not a production-signed release.
 
 The Android 11/API 30 emulator installed and ran both the app and instrumentation APK. An initial UI run was interrupted by Android framework/SystemUI ANRs; it is not a full pass. A separate baseline integration run completed 17/19 cases: one Snow/snow case-sensitive assertion was corrected, and one native-map callback timed out after its CPU-advection assertions had passed. The remaining validation is still open. A real native Weather screenshot was captured with an intentionally offline cached fixture, preserving the saved-weather/error banner. The emulator later disappeared during final lint after its process exceeded 4 GB RSS. The final bounded recovery attempt ended with `FRAMEWORK_NOT_READY` after 40 package-service/boot readiness checks. Latest APK installation and the targeted typed-strip test never started; no latest-runtime pass or new screenshot is claimed. The emulator process remained alive, but Android was not ready to run the app. While collecting diagnostics, Android recovered and exposed package/activity services; one follow-on install/test attempt was made on that same emulator. The APK push completed, but installation failed with `Failure calling service package: Broken pipe (32)` as system_server lost its network stack again. The targeted test never started. No additional emulator restart is planned. The crash log identifies system_server losing its network stack, which also brought down SystemUI. Accelerated CI remains open. Hardware performance is not inferable from this software-only virtual machine.
 
-The current suite contains 50 Android instrumentation scenarios:
+The current suite contains 53 Android instrumentation scenarios:
 
-- 7 UI end-to-end flows: cached launch/search interruption, settings validation and persistence, independent alert targets, repeated radar/plume navigation, the five-phase native minute strip, dry live-section absence, and unknown-phase safety
+- 8 UI end-to-end flows: cached launch/search interruption, settings validation and persistence, independent alert targets, repeated radar/plume navigation, the five-phase native minute strip, dry live-section absence, unknown-phase safety, and Weather section/detail expansion
 - 3 plume UI scenarios: compact ensemble interaction, full stacked charts, and conditional snow
 - 2 settings UI scenarios: independent units/theme and place editing/order
 - 3 background-location integrations: persisted opt-in migration, denied permission preserving saved targets, and consent cancellation
 - 18 live-precipitation integrations: one/two-hour and typed contracts, all supported phases, freshness, thresholds, coverage boundaries and persistent wet-spell/recovery handling
 - 4 shared-request/ViewModel integrations: concurrent consumers, cached failures, the two-minute monotonic cooldown, and waiting for a visible refresh response before starting the next delay
-- 5 adaptive/watch integrations: real WorkManager cadence, unknown/stale/warning protection, Activity/service start, notification Stop/opt-out, and rapid-session generation races
+- 6 adaptive/watch integrations: real WorkManager cadence, unknown/stale/warning protection, Activity/service start, notification Stop/opt-out, rapid-session generation races, and pending-launch preference opt-out
 - 5 forecast/warning integrations: persisted settings/ledger, dateline polygons, CAP filtering, stale/corrupt payloads and 1,000-warning capacity
-- 3 native radar-renderer integrations: actual API PNGs, synthetic moving-storm/NEXRAD geometry, and stale scan rejection
+- 4 native radar-renderer integrations: actual API PNGs, synthetic moving-storm/NEXRAD geometry, stale scan rejection, and new RGB/legacy grayscale snow-mask compatibility
 
 No isolated JVM unit tests were added or run. Wet-weather fixtures are explicitly synthetic where stated; fixtures do not ship in the app APK.
 
