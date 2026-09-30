@@ -17,3 +17,5 @@ dependencyResolutionManagement {
 rootProject.name = "wx-viewer"
 
 include(":app")
+
+include(":macrobenchmark")

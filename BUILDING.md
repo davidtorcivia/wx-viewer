@@ -6,7 +6,7 @@
 - JDK 17 or newer (CI uses Temurin 17)
 - Android SDK Platform 35 and Build Tools 35.0.0
 - Gradle 8.11.1, downloaded automatically by the checked-in wrapper and verified by SHA-256
-- Android Gradle Plugin 8.9.1 and Kotlin / Compose Compiler 2.2.21
+- Android Gradle Plugin 8.10.1 and Kotlin / Compose Compiler 2.2.21
 - Android 8.0 (API 26) or newer device
 
 Set `ANDROID_HOME` to your SDK directory, or create an untracked `local.properties`
