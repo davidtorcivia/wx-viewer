@@ -4,10 +4,10 @@
 
 The source-driven visual parity revision integrates Weather, Radar, compact/full ensemble and settings surfaces. The complete app and test APKs compile; Android lint reports **0 errors and 31 warnings**. All **53 instrumentation scenarios compile**, but the current revision has not yet run on a device. Rendered comparisons with the mobile website remain pending. No exact-visual-match or runtime-pass claim is made for this revision.
 
-The debug APK has version code 3, minimum API 26 and target API 35. Candidate signature and 16 KB ZIP/native-library alignment checks are pending. The configured development signer is unchanged from the earlier previews. Correction-candidate APK size: 62,625,687 bytes. SHA-256:
+The debug APK has version code 3, minimum API 26 and target API 35. The candidate signature, 16 KB ZIP alignment and arm64 native-library alignment are verified. Its development signer matches the earlier previews. Current candidate APK size: 62,640,248 bytes. SHA-256:
 
 ```
-0867eb11c452b728c88223b0296371e97773882b3cda5759b60a2e4136df2a4f
+5d97a27359bf58359841eecf87a4181222cb8c1c26a3fa20000fa79e1453cbc5
 ```
 
 This APK is held for rendered review, not a validated replacement for the delivered preview. The known working API 27 AOSP emulator is being used for that review. Its earlier 0.1.1-preview run passed two real-Activity tests: cached Weather/search close-reopen and the synthetic five-phase minute strip, with clean screenshots. An execution interruption ended that process; its AVD was preserved and restarted without wiping.
@@ -15,6 +15,10 @@ This APK is held for rendered review, not a validated replacement for the delive
 The first published 0.2.0 revision (`7e31ed1`) passed hosted build/lint. Its accelerated API 35 suite reached 40 of 50 cases, with three plume lookup failures and a foreground-service startup crash during rapid Rain watch cancellation/restart. The working correction adds an admitted-start lifecycle guard and prompt foreground promotion, fixes offscreen lazy-list test searches, and adds regressions. This corrected revision still requires its own complete API 35 run.
 
 Two 0.2.0 API 27 Weather checks passed (dry imminent-panel absence and typed minute strip), as did full-plume controls and independent unit/theme persistence. These precede the correction candidate. A launch that unexpectedly scrolled to the spiral was reproduced and is now guarded by a pre-interaction hero assertion; touch-mode charts no longer acquire keyboard focus. The candidate's fresh-launch and visual results remain pending.
+
+The next published revision (`a48c30f`) completed all 53 accelerated API 35 tests: **52 passed, one failed** on a shadowed detail test tag after its expansion assertion had passed. Rain watch startup/cancellation and plume controls passed. The current candidate moves that generic tag to a wrapper, preserving the specific detail visibility assertion. It also saves device artifacts through AGP's pre-uninstall output directory; previous jobs deleted private screenshots when cleaning up the app, so no modern visual-parity claim can be based on those missing images.
+
+That revision's corrected fresh-launch, dry and wet Weather checks also passed on API 27. The hero no longer jumps below the first screen. Current candidate UI refinements and full-suite results remain pending; older-device font shaping still needs comparison with the modern captures. Test forecast values now use relative timestamps so the device flows do not expire with the captured calendar date.
 
 The sections below describe historical 0.1.x checks. A compiled test APK is not a test pass.
 
