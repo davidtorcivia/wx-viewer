@@ -1,0 +1,88 @@
+name: Android
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build and lint
+        run: bash ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest lintDebug
+      - name: Save debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: wx-viewer-debug
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+      - name: Save test and lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-reports
+          path: |
+            app/build/reports/
+            app/build/test-results/
+          if-no-files-found: ignore
+
+  android-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Enable temporary runner KVM access
+        shell: bash
+        run: |
+          test -c /dev/kvm || { echo "This runner has no KVM device"; exit 1; }
+          if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+            command -v getfacl >/dev/null
+            command -v setfacl >/dev/null
+            getfacl --absolute-names /dev/kvm > "$RUNNER_TEMP/wx-kvm-original.acl"
+            sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+          fi
+          test -r /dev/kvm && test -w /dev/kvm
+      - name: Run Android end-to-end tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: default
+          arch: x86_64
+          profile: pixel_2
+          # Hardware acceleration is required for reliable Android framework and UI timing.
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -accel on -no-metrics
+          emulator-boot-timeout: 900
+          disable-animations: true
+          script: sh ./scripts/run-android-e2e.sh
+      - name: Restore runner KVM permissions
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f "$RUNNER_TEMP/wx-kvm-original.acl" ]]; then
+            sudo setfacl --restore="$RUNNER_TEMP/wx-kvm-original.acl"
+          fi
+      - name: Save Android end-to-end reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-e2e-reports
+          path: |
+            app/build/reports/androidTests/
+            app/build/outputs/androidTest-results/
+            app/build/outputs/e2e/
+          if-no-files-found: ignore
