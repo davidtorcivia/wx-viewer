@@ -1,0 +1,27 @@
+# Android performance comparison
+
+The manual `Android performance comparison` workflow measures the selected commit against immutable baseline `5f93837d` on one Ubuntu/API35 KVM emulator. It runs baseline → candidate → baseline repeat, with three measured iterations per scenario and identical full AOT compilation. These are relative diagnostics; they do not establish physical-device speed.
+
+Three measured scenarios cover cached cold startup, Weather scrolling/spiral/hourly scrubbing, and repeated Radar/Plume/Weather navigation with seeded ensemble charts and a synthetic MRMS playback/scrub interval. Startup waits for the large visible `68°` hero, not the loading shell, and records raw launch-to-content observation times alongside Macrobenchmark's initial-display metric. Interaction runs retain frame CPU/overrun samples and Perfetto traces. A fourth, non-measured smoke test launches the actual minified MainActivity, visits Weather/Radar/Plumes/Settings/Alerts, and checks Celsius/dark-theme persistence across cold launch before restoring the fixture.
+
+`app/src/benchmark` supplies a test-only setup Activity and captured NYC forecast values, rebased to the device clock. It seeds normal preferences and repository caches before measurement. The reserved `.invalid` endpoint keeps fixture requests off real weather services; Radar measurements cover native view/control lifecycle rather than live tile throughput. Location, notifications, background alerts and rain watch remain off. Fixtures and their entrypoint are absent from `debug`, `release`, and the deliverable `preview` variant.
+
+Both compared APKs use the same common Gradle overlay: code4, `0.2.1-preview`, AGP8.10.1/R8 compatible with Kotlin2.2, minification/resource shrinking, non-debuggable, profileable, and the existing debug signing configuration. Baseline production files are hashed before and after overlay. The only baseline source probe adds the same read-only hourly/spiral selected-time accessibility descriptions present in the candidate; its exact patch and both hashes are recorded. No baseline drawing or gesture algorithm changes. Benchmark-only keep rules preserve the reflected ensemble/Radar session hooks while allowing optimization. The separate `preview` build is release-like and signed with the existing local key, without fixture/profileable additions. Hosted-runner benchmark signing is separate from the locally signed deliverable.
+
+Rendering comparisons hold stationary for250ms before an identical continuous reversal gesture in both apps, activating the baseline's180ms hold recognizer. Both selected endpoints must differ, so an ignored baseline gesture cannot look like a rendering improvement. The Weather scenario covers spiral, hourly and compact-plume scrubbing plus vertical scrolling; the tab scenario covers full plumes and synthetic Radar playback. Fast no-hold gesture activation is a separate functional test. Frame P95 and positive-overrun rate are retained alongside medians; negative frame slack is compared in milliseconds, and overrun-rate changes in percentage points. Three startup samples are reported raw without a strong tail-confidence claim.
+
+Build locally (JDK17/SDK35):
+
+```sh
+bash ./gradlew :app:assemblePreview :app:assembleBenchmark :macrobenchmark:assembleBenchmark
+```
+
+Run the manual workflow only after both source revisions and the common harness are frozen. The small `android-performance-summary` artifact contains exact commit IDs/APK hashes, original JSON and per-iteration samples, loaded-hero observations, logs, and `comparison.json`/`comparison.md`. Perfetto traces are separate per leg; baseline/candidate/test APKs have separate artifacts, so downloading results does not require transferring multiple APKs. The baseline repeat makes host drift visible; do not infer an improvement from a delta within that drift. No clock-locking, local virtualization permission changes, or physical-device claims are made.
+
+Primary references: [Macrobenchmark setup](https://developer.android.com/topic/performance/benchmarking/macrobenchmark-overview), [CI guidance and emulator limitations](https://developer.android.com/topic/performance/benchmarking/benchmarking-in-ci), [instrumentation arguments](https://developer.android.com/topic/performance/benchmarking/macrobenchmark-instrumentation-args).
+
+## Separate cold/offline preview smoke
+
+The ordinary Android workflow also runs `scripts/run-offline-preview-smoke.sh` after the device suite. A guarded debug-instrumentation phase persists two public fixture places, history, ensemble runs and real native radar snapshots. The script then installs the fixture-free minified `preview` over the same app data and starts `OfflinePreviewSmokeTest` in a separate process. It verifies a new target PID, both cached Weather places, Plumes/Radar, navigation, a real network flap and another cold launch. Radio changes are guarded to a disposable emulator; both test `finally` and shell `trap` restore the initial state. Host networking is untouched.
+
+`android-offline-preview-evidence` contains seed/preview manifests and hashes, process IDs, actual connectivity results, logs and screenshots. These functional checks are separate from A/B/A measurements. The two guarded radar seed/verify phases and the guarded shared seed intentionally skip in the ordinary suite, then execute explicitly; report skips and phase results separately.
