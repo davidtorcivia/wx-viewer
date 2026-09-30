@@ -30,3 +30,9 @@ The phase tests are skipped during a normal suite invocation unless their explic
 - [MapSnapshotter's asynchronous rendering](https://maplibre.org/maplibre-native/android/api/-map-libre%20-native%20-android/org.maplibre.android.snapshotter/-map-snapshotter/index.html)
 
 The installed 11.8.0 AAR was additionally checked for the exact Options/Style.Builder/OfflineManager APIs, and its NativeMapView logical-pixel sizing was inspected before deriving snapshot dimensions. Current online reference pages describe a newer SDK, so they are not the sole API compatibility evidence.
+
+## Inline-style snapshot constructor correction
+
+API 35 execution exposed an SDK constructor defect when a `Style.Builder` combines inline JSON and runtime image sources. The SDK synchronously invokes its style-loaded callback inside `nativeInitialize`, and the callback attempts `nativeAddSource` before the snapshotter's native peer exists. This matches upstream [MapLibre issue 4606](https://github.com/maplibre/maplibre-native/issues/4606).
+
+`renderRadarSnapshot` is now the single path for production captures and device fixture captures. It constructs against a tiny bundled asset URI, then immediately applies the actual stripped JSON through `setStyleJson` after construction. The constructor performs no external bootstrap request. Each capture receives a new builder/source/layer set; the helper rejects a preconfigured or reused builder. Native image-pixel, warning-exclusion and persistent-image assertions remain unchanged. The correction still requires the coordinated API 35 rerun before a runtime pass can be claimed.
