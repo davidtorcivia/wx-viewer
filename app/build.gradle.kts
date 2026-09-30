@@ -14,8 +14,8 @@ android {
         applicationId = "zone.disinfo.wx"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.2.0-preview"
+        versionCode = 4
+        versionName = "0.2.1-preview"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {
@@ -26,6 +26,19 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+        }
+        create("benchmark") {
+            initWith(getByName("release"))
+            isDebuggable = false
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
+            proguardFiles("benchmark-rules.pro")
+        }
+        create("preview") {
+            initWith(getByName("release"))
+            isDebuggable = false
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "release"
         }
     }
     buildFeatures { compose = true }
@@ -62,6 +75,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("org.maplibre.gl:android-sdk:11.8.0")
+    add("benchmarkImplementation", "androidx.profileinstaller:profileinstaller:1.4.1")
 
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
