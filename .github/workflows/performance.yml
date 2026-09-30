@@ -1,0 +1,136 @@
+name: Android performance comparison
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: Immutable baseline commit SHA
+        required: true
+        default: '5f93837d808ace366f07a496358478fde643e4db'
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: candidate
+          ref: ${{ github.sha }}
+      - name: Require immutable baseline
+        env:
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+        run: '[[ "$BASELINE_REF" =~ ^[0-9a-fA-F]{7,40}$ ]]'
+      - uses: actions/checkout@v4
+        with:
+          path: baseline
+          ref: ${{ inputs.baseline_ref }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Apply identical benchmark infrastructure
+        run: |
+          python3 candidate/scripts/prepare-performance-baseline.py --harness candidate --baseline baseline
+          mkdir -p performance-results
+          git -C candidate rev-parse HEAD > performance-results/optimized-commit.txt
+          git -C baseline rev-parse HEAD > performance-results/baseline-commit.txt
+          cp baseline/benchmark-overlay-verification.json performance-results/
+          cp baseline/benchmark-semantic-probe.patch performance-results/
+      - name: Build release-like benchmark pair
+        run: |
+          (cd baseline && bash ./gradlew --no-daemon --max-workers=2 :app:assembleBenchmark)
+          (cd candidate && bash ./gradlew --no-daemon --max-workers=2 :app:assembleBenchmark :macrobenchmark:assembleBenchmark)
+      - name: Enable temporary runner KVM access
+        shell: bash
+        run: |
+          test -c /dev/kvm || { echo "This runner has no KVM device"; exit 1; }
+          if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+            getfacl --absolute-names /dev/kvm > "$RUNNER_TEMP/wx-kvm-original.acl"
+            sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+          fi
+          test -r /dev/kvm && test -w /dev/kvm
+      - name: Measure baseline, optimized, baseline repeat
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: default
+          arch: x86_64
+          profile: pixel_2
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -accel on -no-metrics -memory 2048 -cores 2
+          emulator-boot-timeout: 900
+          disable-animations: false
+          script: bash candidate/scripts/run-performance-comparison.sh baseline/app/build/outputs/apk/benchmark/app-benchmark.apk candidate/app/build/outputs/apk/benchmark/app-benchmark.apk candidate/macrobenchmark/build/outputs/apk/benchmark/macrobenchmark-benchmark.apk performance-results
+      - name: Restore runner KVM permissions
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/wx-kvm-original.acl" ]]; then
+            sudo setfacl --restore="$RUNNER_TEMP/wx-kvm-original.acl"
+          fi
+      - name: Save benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-performance-summary
+          path: |
+            performance-results/
+            !performance-results/**/*.perfetto-trace
+            !performance-results/**/*.trace
+          if-no-files-found: error
+      - name: Save baseline traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-performance-traces-baseline
+          path: |
+            performance-results/baseline/**/*.perfetto-trace
+            performance-results/baseline/**/*.trace
+          if-no-files-found: ignore
+      - name: Save optimized traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-performance-traces-optimized
+          path: |
+            performance-results/optimized/**/*.perfetto-trace
+            performance-results/optimized/**/*.trace
+          if-no-files-found: ignore
+      - name: Save repeated baseline traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-performance-traces-baseline-repeat
+          path: |
+            performance-results/baseline-repeat/**/*.perfetto-trace
+            performance-results/baseline-repeat/**/*.trace
+          if-no-files-found: ignore
+      - name: Save baseline benchmark APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-performance-baseline-apk
+          path: |
+            baseline/app/build/outputs/apk/benchmark/
+            baseline/app/build/outputs/mapping/benchmark/
+          if-no-files-found: ignore
+      - name: Save candidate benchmark APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-performance-candidate-apk
+          path: |
+            candidate/app/build/outputs/apk/benchmark/
+            candidate/app/build/outputs/mapping/benchmark/
+          if-no-files-found: ignore
+      - name: Save benchmark test APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-performance-test-apk
+          path: |
+            candidate/macrobenchmark/build/outputs/apk/benchmark/
+          if-no-files-found: ignore
