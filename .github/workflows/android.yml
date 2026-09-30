@@ -68,7 +68,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -accel on -no-metrics
           emulator-boot-timeout: 900
           disable-animations: true
-          script: sh ./scripts/run-android-e2e.sh
+          script: WX_REQUIRE_SCREENSHOTS=1 sh ./scripts/run-android-e2e.sh
       - name: Restore runner KVM permissions
         if: always()
         shell: bash
@@ -84,5 +84,6 @@ jobs:
           path: |
             app/build/reports/androidTests/
             app/build/outputs/androidTest-results/
+            app/build/outputs/connected_android_test_additional_output/
             app/build/outputs/e2e/
           if-no-files-found: ignore
