@@ -50,6 +50,7 @@ class RainWatchIntegrationTest {
     fun prepare() {
         original = store.load()
         RainWatchController.stop(context)
+        waitFor { !RainWatchController.serviceBusy }
         if (
             Build.VERSION.SDK_INT >= 33 &&
                 context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
@@ -82,6 +83,7 @@ class RainWatchIntegrationTest {
     @After
     fun restore() {
         RainWatchController.stop(context)
+        waitFor { !RainWatchController.serviceBusy }
         scenario?.close()
         cancelChecks()
         store.save(original)
@@ -212,6 +214,7 @@ class RainWatchIntegrationTest {
         stop.actionIntent.send()
         waitFor {
             !RainWatchController.state.value.active &&
+                !RainWatchController.serviceBusy &&
                 manager.activeNotifications.none { it.id == RainWatchService.NOTIFICATION_ID }
         }
     }
@@ -219,12 +222,23 @@ class RainWatchIntegrationTest {
     @Test
     fun rapidStartStopStartIgnoresObsoleteTokensAndOldSessionCompletion() {
         openActivity()
-        waitFor { !RainWatchController.serviceAlive }
+        waitFor { !RainWatchController.serviceBusy }
         scenario!!.onActivity { activity ->
             assertNull(RainWatchController.start(activity))
-            // The Activity callback deliberately does all three actions before the
-            // main looper can deliver a queued Service.onCreate/onStartCommand.
+            // The Activity callback deliberately cancels before the main looper can
+            // deliver onCreate. The admitted launch must still promote then terminate.
             RainWatchController.stop(activity)
+            assertFalse(RainWatchController.state.value.active)
+            assertTrue(RainWatchController.serviceBusy)
+            assertEquals(
+                "Rain watch is still stopping; try again in a moment",
+                RainWatchController.start(activity),
+            )
+        }
+        waitFor { !RainWatchController.serviceBusy }
+        assertTrue(manager.activeNotifications.none { it.id == RainWatchService.NOTIFICATION_ID })
+        scenario!!.onActivity { activity ->
+            // A new visible user action is accepted only after actual lifecycle teardown.
             assertNull(RainWatchController.start(activity))
             assertFalse(RainWatchController.consumeStartToken("obsolete-start-token"))
             assertFalse(
@@ -236,12 +250,36 @@ class RainWatchIntegrationTest {
             RainWatchController.state.value.active &&
                 manager.activeNotifications.any { it.id == RainWatchService.NOTIFICATION_ID }
         }
+        // Leave enough time for Android's foreground promotion watchdog. A queued
+        // platform crash cannot be mistaken for a passing startup assertion.
+        Thread.sleep(12_000)
         assertTrue(RainWatchController.state.value.active)
         RainWatchController.stop(context)
         waitFor {
             !RainWatchController.state.value.active &&
+                !RainWatchController.serviceBusy &&
                 manager.activeNotifications.none { it.id == RainWatchService.NOTIFICATION_ID }
         }
+    }
+
+    @Test
+    fun preferenceOptOutBeforeCreationStillCompletesForegroundHandshake() {
+        openActivity()
+        scenario!!.onActivity { activity ->
+            assertNull(RainWatchController.start(activity))
+            // Production reconciliation can run before Android delivers onCreate.
+            store.update { it.copy(alerts = it.alerts.copy(enabled = false)) }
+            RainWatchController.reconcile(activity)
+            assertFalse(RainWatchController.state.value.active)
+            assertTrue(RainWatchController.serviceBusy)
+        }
+        waitFor { !RainWatchController.serviceBusy }
+        assertFalse(RainWatchController.state.value.active)
+        assertTrue(manager.activeNotifications.none { it.id == RainWatchService.NOTIFICATION_ID })
+        // Do not hide an asynchronous platform watchdog failure with immediate test exit.
+        Thread.sleep(12_000)
+        assertFalse(RainWatchController.state.value.active)
+        assertNull(store.load().currentPlace)
     }
 
     @Test
@@ -253,6 +291,7 @@ class RainWatchIntegrationTest {
         // The real SharedPreferences listener revokes the session, even without an explicit sync.
         waitFor {
             !RainWatchController.state.value.active &&
+                !RainWatchController.serviceBusy &&
                 manager.activeNotifications.none { it.id == RainWatchService.NOTIFICATION_ID }
         }
         store.save(chosen)
