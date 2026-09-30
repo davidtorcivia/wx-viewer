@@ -258,6 +258,16 @@ class WeatherAppE2eTest {
     fun repeatedRadarAndPlumeNavigationReturnsToUsableForecast() {
         repeat(2) {
             compose.onNodeWithTag("tab_radar").performClick().assertIsSelected()
+            if (it == 0) {
+                compose.onNodeWithTag("radar_scrubber").assertIsDisplayed()
+                compose.onNodeWithTag("radar_overlay").assertIsDisplayed()
+                screenshot("radar-controls-offline-endpoint")
+                compose.onNodeWithTag("radar_overlay").performClick()
+                compose.onNodeWithText("Satellite", useUnmergedTree = true).assertIsDisplayed()
+                screenshot("radar-overlay-selector-offline-endpoint")
+                androidx.test.espresso.Espresso.pressBack()
+                compose.onNodeWithTag("tab_radar").assertIsSelected()
+            }
             compose.onNodeWithTag("tab_plumes").performClick().assertIsSelected()
             compose.onNodeWithTag("tab_weather").performClick().assertIsSelected()
             compose.onNodeWithTag("weather_overview").assertIsDisplayed()
@@ -324,7 +334,7 @@ class WeatherAppE2eTest {
     fun weatherSectionsRenderAndDetailsExpandInPlace() {
         val page = compose.onNodeWithTag("weather_overview")
         page.performScrollToNode(hasTestTag("web_temperature_spiral"))
-        compose.onNodeWithTag("web_temperature_spiral").assertIsDisplayed()
+        compose.onNodeWithTag("web_temperature_spiral").performScrollTo().assertIsDisplayed()
         screenshot("weather-spiral")
         page.performScrollToNode(hasTestTag("condition_feels"))
         compose.onNodeWithTag("condition_feels").performScrollTo().performClick()
@@ -339,17 +349,20 @@ class WeatherAppE2eTest {
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
         screenshot("weather-condition-cells")
         page.performScrollToNode(hasTestTag("web_hourly_chart"))
-        compose.onNodeWithTag("web_hourly_chart").assertIsDisplayed()
+        compose.onNodeWithTag("web_hourly_chart").performScrollTo().assertIsDisplayed()
         screenshot("weather-48-hour-chart")
         page.performScrollToNode(hasTestTag("daily_forecast"))
-        compose.onNodeWithTag("daily_forecast").assertIsDisplayed()
+        compose.onNodeWithTag("daily_forecast").performScrollTo().assertIsDisplayed()
         screenshot("weather-daily-rows")
         val day = fixtureDetailDay
         compose.onNodeWithTag("day_$day").performScrollTo().performClick()
         compose
             .onNodeWithTag("day_$day")
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded"))
-        compose.onNodeWithTag("day_detail_$day").performScrollTo().assertIsDisplayed()
+        compose
+            .onNodeWithTag("day_detail_$day", useUnmergedTree = true)
+            .performScrollTo()
+            .assertIsDisplayed()
         screenshot("weather-expanded-daily-ribbon")
         compose.onNodeWithTag("day_$day").performScrollTo().performClick()
         compose
