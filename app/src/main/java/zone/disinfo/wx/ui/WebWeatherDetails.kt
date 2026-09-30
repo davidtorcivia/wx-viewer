@@ -1,5 +1,6 @@
 package zone.disinfo.wx.ui
 
+import android.graphics.Canvas as NativeCanvas
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
@@ -71,6 +72,7 @@ fun WebDetailSeriesChart(
     val secondary = MaterialTheme.colorScheme.onSurfaceVariant
     val density = LocalDensity.current.density
     val active = rows[index.coerceIn(rows.indices)]
+    val activeTime = rememberUpdatedState(active.timeMillis)
     Column(modifier.fillMaxWidth()) {
         FlowRow(
             Modifier.fillMaxWidth().heightIn(min = 22.dp),
@@ -93,7 +95,7 @@ fun WebDetailSeriesChart(
                 }
             bars?.let { WebText(it.text(active), 13f, weight = 600) }
         }
-        Canvas(
+        CachedNativeChart(
             Modifier.fillMaxWidth()
                 .height(170.dp)
                 .testTag("web_detail_series_chart")
@@ -122,9 +124,20 @@ fun WebDetailSeriesChart(
                             if (!change.pressed) break
                         }
                     }
-                }
-        ) {
-            val canvas = drawContext.canvas.nativeCanvas
+                },
+            rows,
+            lines,
+            format,
+            zone,
+            units,
+            bars,
+            zero,
+            maximum,
+            ink,
+            secondary,
+            face,
+            density,
+        ) { canvas, size ->
             canvas.save()
             canvas.scale(density, density)
             val width = max(260f, size.width / density)
@@ -208,14 +221,16 @@ fun WebDetailSeriesChart(
                         ),
                     )
             }
-            canvas.drawLine(
-                x(active.timeMillis),
-                top,
-                x(active.timeMillis),
-                height - bottom,
-                stroke(ink.toArgb(), 1f),
-            )
             canvas.restore()
+            val cursorPaint = stroke(ink.toArgb(), 1f)
+            val drawOverlay: (NativeCanvas) -> Unit = { target ->
+                target.save()
+                target.scale(density, density)
+                val xx = x(activeTime.value)
+                target.drawLine(xx, top, xx, height - bottom, cursorPaint)
+                target.restore()
+            }
+            drawOverlay
         }
     }
 }

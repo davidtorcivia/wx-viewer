@@ -25,7 +25,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -39,12 +38,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.res.ResourcesCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlin.math.*
-import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.coroutineScope
 import zone.disinfo.wx.R
 import zone.disinfo.wx.data.*
@@ -108,6 +112,19 @@ internal data class PriorPlume(val label: String, val points: List<EnsemblePoint
 
 internal data class PlumeBundle(val current: EnsembleData, val previous: List<PriorPlume>)
 
+internal fun ensembleSavedAge(data: EnsembleData, now: Long = System.currentTimeMillis()): String {
+    if (!data.fromCache) return ""
+    val minutes = ((now - data.fetchedAt).coerceAtLeast(0) / 60_000)
+    val age = when {
+        minutes < 1 -> "just now"
+        minutes < 60 -> "${minutes}m ago"
+        minutes < 24 * 60 -> "${minutes / 60}h ago"
+        else -> "${minutes / (24 * 60)}d ago"
+    }
+    return "Saved $age • ${data.cycle.run}Z ${data.cycle.date}" +
+        if (minutes >= 6 * 60) " • older data" else ""
+}
+
 internal val compactParameters =
     listOf(
         PlumeParameter.TEMPERATURE,
@@ -124,59 +141,66 @@ fun CompactPlumes(
     timeZone: String,
     onFullPlumes: (String) -> Unit,
     modifier: Modifier = Modifier,
+    networkAvailability: NetworkAvailability = NetworkAvailability.UNKNOWN,
 ) {
     if (station == null || (station.km ?: Double.POSITIVE_INFINITY) > 40) return
     var selected by rememberSaveable(station.id) { mutableStateOf(PlumeParameter.TEMPERATURE.name) }
     var userSelected by remember(station.id) { mutableStateOf(false) }
     var showSnow by remember(station.id) { mutableStateOf(false) }
-    var bundle by remember(serverUrl, station.id, selected) { mutableStateOf<PlumeBundle?>(null) }
-    var pending by remember(serverUrl, station.id, selected) { mutableStateOf(true) }
     val parameter = PlumeParameter.valueOf(selected)
     val cycle = remember { EnsembleCycle.latest("refs") }
-    LaunchedEffect(serverUrl, station.id, cycle) {
-        val d =
-            EnsembleRepository.optional(serverUrl, station.id, "refs", cycle, "Total-SNO")
-                ?: return@LaunchedEffect
-        showSnow = (d.mean.mapNotNull { it.p90 } + d.rrfs.map { it.value }).any { it >= .1 }
-        if (d.mean.any { it.value >= 1 } && !userSelected) selected = PlumeParameter.SNOW.name
+    var bundle by remember(serverUrl, station.id, selected) {
+        mutableStateOf(EnsembleRepository.peek(serverUrl, station.id, "refs", cycle, parameter.api)
+            ?.let { PlumeBundle(it, emptyList()) })
     }
-    LaunchedEffect(serverUrl, station.id, parameter, cycle) {
-        pending = true
-        val loaded = coroutineScope {
-            (0..2)
-                .map { i ->
-                    async {
-                        EnsembleRepository.optional(
-                            serverUrl,
-                            station.id,
-                            "refs",
-                            cycle.previous(i),
-                            parameter.api,
-                        )
+    var pending by remember(serverUrl, station.id, selected) { mutableStateOf(bundle == null) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle, serverUrl, station.id, cycle, networkAvailability) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            try {
+                EnsembleRepository.observe(serverUrl, station.id, "refs", cycle, "Total-SNO",
+                    allowPreviousCycle = true)
+                    .collect { d ->
+                        showSnow = (d.mean.mapNotNull { it.p90 } + d.rrfs.map { it.value })
+                            .any { it >= .1 }
+                        if (d.mean.any { it.value >= 1 } && !userSelected)
+                            selected = PlumeParameter.SNOW.name
+                    }
+            } catch (error: CancellationException) { throw error }
+            catch (_: Exception) { /* Optional snow discovery should not hide other cached charts. */ }
+        }
+    }
+    LaunchedEffect(lifecycle, serverUrl, station.id, parameter, cycle, networkAvailability) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            pending = bundle == null
+            val loaded = arrayOfNulls<EnsembleData>(3)
+            fun publish() {
+                val current = loaded[0] ?: return
+                bundle = PlumeBundle(current, loaded.drop(1).mapIndexedNotNull { i, prior ->
+                    prior?.let {
+                        PriorPlume("${it.cycle.run}Z",
+                            if (parameter.total) rebaseEnsemble(it.mean, current.mean) else it.mean, i)
+                    }
+                }.filter { it.points.isNotEmpty() })
+                pending = false
+            }
+            coroutineScope {
+                (0..2).forEach { index ->
+                    launch {
+                        try {
+                            EnsembleRepository.observe(serverUrl, station.id, "refs",
+                                cycle.previous(index), parameter.api,
+                                allowPreviousCycle = index == 0).collect { data ->
+                                loaded[index] = data
+                                publish()
+                            }
+                        } catch (error: CancellationException) { throw error }
+                        catch (_: Exception) { /* Keep current and successful prior runs visible. */ }
+                        finally { if (index == 0) pending = false }
                     }
                 }
-                .map { it.await() }
-        }
-        bundle =
-            loaded[0]?.let { current ->
-                PlumeBundle(
-                    current,
-                    loaded
-                        .drop(1)
-                        .mapIndexedNotNull { i, d ->
-                            if (d == null) null
-                            else
-                                PriorPlume(
-                                    "${d.cycle.run}Z",
-                                    if (parameter.total) rebaseEnsemble(d.mean, current.mean)
-                                    else d.mean,
-                                    i,
-                                )
-                        }
-                        .filter { it.points.isNotEmpty() },
-                )
             }
-        pending = false
+        }
     }
     val dark = MaterialTheme.colorScheme.surface.luminance() < .5f
     Column(modifier.fillMaxWidth().testTag("compact_plumes")) {
@@ -205,6 +229,10 @@ fun CompactPlumes(
                 modifier = Modifier.heightIn(min = 36.dp),
             )
         else {
+            val savedAge = ensembleSavedAge(b.current)
+            if (savedAge.isNotEmpty()) Text(savedAge, fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 6.dp).testTag("compact_ensemble_cache_age"))
             val trend = remember(b, parameter, units) { plumeTrend(b, parameter, units) }
             if (trend.isNotBlank())
                 Text(
@@ -299,7 +327,7 @@ fun CompactPlumes(
                     horizontalArrangement = Arrangement.spacedBy(14.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    PlumeLegendKey("${cycle.run}Z mean", MaterialTheme.colorScheme.onSurface)
+                    PlumeLegendKey("${b.current.cycle.run}Z mean", MaterialTheme.colorScheme.onSurface)
                     PlumeLegendKey("RRFS", MaterialTheme.colorScheme.onSurface, true)
                     b.previous.forEach { PlumeLegendKey(it.label, plumeRunColor(it.rank, dark)) }
                 }
@@ -456,6 +484,7 @@ internal fun EnsemblePlot(
     featured: Boolean = false,
 ) {
     val context = LocalContext.current
+    val density = androidx.compose.ui.platform.LocalDensity.current.density
     val dark = MaterialTheme.colorScheme.surface.luminance() < .5f
     val font =
         remember(context) {
@@ -463,10 +492,17 @@ internal fun EnsemblePlot(
         }
     val ink = MaterialTheme.colorScheme.onSurface.toArgb()
     val muted = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
-    val range = plumeTimeRange(data, compact, style, previous)
+    val range =
+        remember(data, compact, style, previous) {
+            plumeTimeRange(data, compact, style, previous)
+        }
+    val selection = rememberUpdatedState(cursor)
+    val selectCursor by rememberUpdatedState(onCursor)
+    val releaseCursor by rememberUpdatedState(onRelease)
+    val clockMinute = System.currentTimeMillis() / 60_000L
     val first = range.first
     val last = range.second
-    Canvas(
+    CachedNativeChart(
         modifier
             .fillMaxWidth()
             .height(if (compact) 210.dp else if (featured) 290.dp else 250.dp)
@@ -480,7 +516,7 @@ internal fun EnsemblePlot(
  "spaghetti" -> "Lines"
  else -> "Both"}} · ${(last-first)/ENSEMBLE_HOUR}-hour forecast horizon"
             }
-            .pointerInput(first, last) {
+            .pointerInput(first, last, density) {
                 detectTapGestures(
                     onTap = { o ->
                         val t =
@@ -489,44 +525,77 @@ internal fun EnsemblePlot(
                                     0f,
                                     1f,
                                 ) * (last - first)
-                        onCursor(snapPlumeTime(t.toLong()).coerceIn(first, last))
-                        onRelease()
+                        selectCursor(snapPlumeTime(t.toLong()).coerceIn(first, last))
+                        releaseCursor()
                     }
                 )
             }
-            .pointerInput(first, last) {
+            .pointerInput(first, last, density) {
+                var lastDispatched: Long? = null
+                fun select(x: Float) {
+                    val t =
+                        first +
+                            ((x - 44.dp.toPx()) / (size.width - 56.dp.toPx())).coerceIn(0f, 1f) *
+                                (last - first)
+                    val snapped = snapPlumeTime(t.toLong()).coerceIn(first, last)
+                    if (lastDispatched != snapped) {
+                        lastDispatched = snapped
+                        selectCursor(snapped)
+                    }
+                }
                 detectHorizontalDragGestures(
+                    onDragStart = { position ->
+                        lastDispatched = null
+                        select(position.x)
+                    },
                     onHorizontalDrag = { change, _ ->
                         change.consume()
-                        val t =
-                            first +
-                                ((change.position.x - 44.dp.toPx()) / (size.width - 56.dp.toPx()))
-                                    .coerceIn(0f, 1f) * (last - first)
-                        onCursor(snapPlumeTime(t.toLong()).coerceIn(first, last))
+                        select(change.position.x)
                     },
-                    onDragEnd = onRelease,
-                    onDragCancel = onRelease,
+                    onDragEnd = {
+                        lastDispatched = null
+                        releaseCursor()
+                    },
+                    onDragCancel = {
+                        lastDispatched = null
+                        releaseCursor()
+                    },
                 )
-            }
-    ) {
-        drawPlumeCanvas(
-            drawContext.canvas.nativeCanvas,
-            size.width,
-            size.height,
-            density,
-            data,
-            parameter,
-            units,
-            zone,
-            previous,
-            cursor,
-            compact,
-            style,
-            dark,
-            font,
-            ink,
-            muted,
-        )
+            },
+        data,
+        parameter,
+        units,
+        zone,
+        previous,
+        compact,
+        style,
+        dark,
+        font,
+        ink,
+        muted,
+        clockMinute,
+        density,
+    ) { canvas, size ->
+        val drawCursor =
+            preparePlumeCanvas(
+                canvas,
+                size.width,
+                size.height,
+                density,
+                data,
+                parameter,
+                units,
+                zone,
+                previous,
+                compact,
+                style,
+                dark,
+                font,
+                ink,
+                muted,
+            )
+        val drawOverlay: (AndroidCanvas) -> Unit = { target -> drawCursor(target, selection.value) }
+        drawOverlay
     }
 }
 
@@ -560,14 +629,10 @@ internal fun plumeTimeRange(
                         listOf("ARW" to "AR", "NMB" to "MB")
                             .filter { it.first in style.visibleCores }
                             .forEach { (_, prefix) ->
-                                addAll(
-                                    memberBand(
-                                        data.series
-                                            .filterKeys { it.startsWith(prefix) }
-                                            .values
-                                            .toList()
-                                    )
-                                )
+                                data.series
+                                    .filterKeys { it.startsWith(prefix) }
+                                    .values
+                                    .forEach { addAll(it) }
                             }
                     } else if ("Mean" in style.visibleCores) addAll(data.mean)
                 }
@@ -599,6 +664,44 @@ internal fun drawPlumeCanvas(
     ink: Int,
     muted: Int,
 ) {
+    val drawCursor =
+        preparePlumeCanvas(
+            canvas,
+            width,
+            height,
+            density,
+            data,
+            parameter,
+            units,
+            zone,
+            previous,
+            compact,
+            style,
+            dark,
+            font,
+            ink,
+            muted,
+        )
+    drawCursor(canvas, cursor)
+}
+
+private fun preparePlumeCanvas(
+    canvas: AndroidCanvas,
+    width: Float,
+    height: Float,
+    density: Float,
+    data: EnsembleData,
+    parameter: PlumeParameter,
+    units: DisplayUnits,
+    zone: String,
+    previous: List<PriorPlume>,
+    compact: Boolean,
+    style: PlumePlotStyle,
+    dark: Boolean,
+    font: Typeface,
+    ink: Int,
+    muted: Int,
+): (AndroidCanvas, Long?) -> Unit {
     val save = canvas.save()
     canvas.scale(density, density)
     val w = width / density
@@ -647,9 +750,7 @@ internal fun drawPlumeCanvas(
     fun x(time: Long) = l + ((time - first).toDouble() / (last - first) * (r - l)).toFloat()
     fun y(value: Double) = b - ((convert(value) - lo) / (hi - lo) * (b - t)).toFloat()
     val paint =
-        Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            typeface = font
-            fontFeatureSettings = "tnum"
+        chartTextPaint(font, ink, 11f, if (compact) 600 else 400).apply {
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
         }
@@ -699,8 +800,6 @@ internal fun drawPlumeCanvas(
         paint.style = Paint.Style.FILL
         paint.textAlign = align
         paint.textSize = size
-        paint.fontVariationSettings =
-            if (compact) "'wdth' 96, 'wght' 600" else "'wdth' 96, 'wght' 400"
         canvas.drawText(text, px, py, paint)
     }
     for (i in 0..if (compact) 3 else 5) {
@@ -770,13 +869,7 @@ internal fun drawPlumeCanvas(
                 it.timeMillis in first..last && lower(it) != null && upper(it) != null
             }
             if (usable.size < 2) return
-            val curve = smoothPlumePath(usable.map { x(it.timeMillis) to y(upper(it)!!) })
             val lowerPoints = usable.asReversed().map { x(it.timeMillis) to y(lower(it)!!) }
-            val lowerPath = smoothPlumePath(lowerPoints)
-            curve.lineTo(lowerPoints.first().first, lowerPoints.first().second)
-            curve.addPath(lowerPath)
-            curve.lineTo(x(usable.first().timeMillis), y(upper(usable.first())!!))
-            curve.close()
             // A single continuous contour avoids winding gaps from the return curve.
             val continuous = AndroidPath()
             appendSmooth(continuous, usable.map { x(it.timeMillis) to y(upper(it)!!) }, true)
@@ -825,27 +918,33 @@ internal fun drawPlumeCanvas(
         canvas.drawLine(x(now), t, x(now), b, paint)
         text("NOW", x(now) + 4, t + 10, ink, Paint.Align.LEFT, 10f)
     }
-    cursor
-        ?.takeIf { it in first..last }
-        ?.let { at ->
-            setPaint(ink, .6f, 1f)
-            canvas.drawLine(x(at), t, x(at), b, paint)
-            val tracked =
-                if (compact) listOf(data.mean)
-                else
-                    listOfNotNull(
-                        data.mean.takeIf { "Mean" in style.visibleCores },
-                        data.rrfs.takeIf { "MEM" in style.visibleCores && style.mode != "bands" },
-                    ) + previous.map { it.points }
-            tracked.forEach { pts ->
-                ensembleInterpolate(pts, at)?.let { value ->
-                    setPaint(ink, 1f, fill = true)
-                    canvas.drawCircle(x(at), y(value), if (compact) 4f else 4.5f, paint)
-                }
-            }
-        }
     canvas.restore()
     canvas.restoreToCount(save)
+    val tracked =
+        if (compact) listOf(data.mean)
+        else
+            listOfNotNull(
+                data.mean.takeIf { "Mean" in style.visibleCores },
+                data.rrfs.takeIf { "MEM" in style.visibleCores && style.mode != "bands" },
+            ) + previous.map { it.points }
+    return { target, cursor ->
+        val cursorSave = target.save()
+        target.scale(density, density)
+        target.clipRect(l, t, r, b)
+        cursor
+            ?.takeIf { it in first..last }
+            ?.let { at ->
+                setPaint(ink, .6f, 1f)
+                target.drawLine(x(at), t, x(at), b, paint)
+                tracked.forEach { pts ->
+                    ensembleInterpolate(pts, at)?.let { value ->
+                        setPaint(ink, 1f, fill = true)
+                        target.drawCircle(x(at), y(value), if (compact) 4f else 4.5f, paint)
+                    }
+                }
+            }
+        target.restoreToCount(cursorSave)
+    }
 }
 
 internal fun memberBand(series: List<List<EnsemblePoint>>): List<EnsemblePoint> =

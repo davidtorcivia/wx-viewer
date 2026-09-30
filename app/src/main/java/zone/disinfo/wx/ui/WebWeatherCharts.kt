@@ -5,13 +5,14 @@ import android.graphics.DashPathEffect
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path as NativePath
+import android.graphics.Picture
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import android.util.LruCache
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -19,7 +20,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.nativeCanvas
@@ -61,6 +64,52 @@ internal fun chartTypeface(): Typeface {
     }
 }
 
+/**
+ * Record the stable chart once per data/style/size change. Cursor state is read only by the
+ * returned overlay, so scrubbing replays retained native paths and text without rebuilding them.
+ */
+@Composable
+internal fun CachedNativeChart(
+    modifier: Modifier,
+    vararg cacheKeys: Any?,
+    buildDrawing: (NativeCanvas, Size) -> (NativeCanvas) -> Unit,
+) {
+    val drawing =
+        remember(*cacheKeys) {
+            Modifier.drawWithCache {
+                val picture = Picture()
+                val canvas =
+                    picture.beginRecording(ceil(size.width).toInt(), ceil(size.height).toInt())
+                val overlay = buildDrawing(canvas, size)
+                picture.endRecording()
+                onDrawBehind {
+                    val target = drawContext.canvas.nativeCanvas
+                    target.drawPicture(picture)
+                    overlay(target)
+                }
+            }
+        }
+    Spacer(modifier.then(drawing))
+}
+
+private data class ChartFaceKey(val base: Typeface, val weight: Int, val width: Int)
+
+private val chartFaces = LruCache<ChartFaceKey, Typeface>(48)
+
+private fun chartFace(base: Typeface, weight: Int, width: Int): Typeface {
+    val key = ChartFaceKey(base, weight, width)
+    return synchronized(chartFaces) {
+        chartFaces.get(key)
+            ?: Paint()
+                .apply {
+                    typeface = base
+                    fontVariationSettings = "'wght' $weight, 'wdth' $width"
+                }
+                .typeface
+                .also { chartFaces.put(key, it) }
+    }
+}
+
 internal fun chartTextPaint(
     face: Typeface,
     color: Int,
@@ -70,11 +119,11 @@ internal fun chartTextPaint(
     align: Paint.Align = Paint.Align.LEFT,
 ): Paint =
     Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        typeface = face
+        // Typeface instances are immutable; each chart still owns its mutable Paint.
+        typeface = chartFace(face, weight, width)
         this.color = color
         textSize = size
         textAlign = align
-        fontVariationSettings = "'wght' $weight, 'wdth' $width"
         fontFeatureSettings = "tnum"
     }
 
@@ -198,55 +247,80 @@ internal fun webOklch(l: Double, c: Double, h: Double): Color {
     )
 }
 
-/**
- * A tap pins an hour. Holding 180ms scrubs; a quick >6 CSS-pixel movement remains page scrolling.
- */
+/** Taps pin an hour; horizontal motion scrubs immediately, while vertical motion scrolls. */
+@Composable
 internal fun Modifier.webScrub(
     key: Any?,
     onSelectTime: (Long?) -> Unit,
     timeAt: (Offset, Int, Int) -> Long?,
-) =
-    pointerInput(key) {
-        val threshold = 6.dp.toPx()
+): Modifier {
+    val select by rememberUpdatedState(onSelectTime)
+    val lookup by rememberUpdatedState(timeAt)
+    return pointerInput(key) {
+        val threshold = viewConfiguration.touchSlop
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
-            var scroll = false
+            var scrolling = false
             var released = false
+            var scrubbing = false
             var last = down
+            var emitted = false
+            var lastTime: Long? = null
+            fun publish(point: Offset) {
+                val next = lookup(point, size.width, size.height)
+                if (!emitted || next != lastTime) {
+                    emitted = true
+                    lastTime = next
+                    select(next)
+                }
+            }
+            // A stationary hold still supports circular spiral exploration. A clearly
+            // horizontal drag does not wait for this timer before responding.
             val early =
                 withTimeoutOrNull(180L) {
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         last = change
+                        if (change.isConsumed) {
+                            scrolling = true
+                            break
+                        }
                         if (!change.pressed) {
                             change.consume()
-                            onSelectTime(timeAt(change.position, size.width, size.height))
+                            publish(change.position)
                             released = true
                             break
                         }
-                        if (
-                            (change.position - down.position).getDistance() > threshold ||
-                                change.isConsumed
-                        ) {
-                            scroll = true
+                        val movement = change.position - down.position
+                        val horizontal = abs(movement.x)
+                        val vertical = abs(movement.y)
+                        if (vertical > threshold && vertical >= horizontal) {
+                            scrolling = true
+                            break
+                        }
+                        if (horizontal > threshold && horizontal > vertical) {
+                            change.consume()
+                            publish(change.position)
+                            scrubbing = true
                             break
                         }
                     }
                     true
                 }
-            if (early == null && !scroll && !released) {
-                onSelectTime(timeAt(last.position, size.width, size.height))
+            if (!scrolling && !released && (scrubbing || early == null)) {
+                if (!scrubbing) publish(last.position)
                 while (true) {
                     val event = awaitPointerEvent(PointerEventPass.Initial)
                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
                     change.consume()
-                    onSelectTime(timeAt(change.position, size.width, size.height))
+                    publish(change.position)
                     if (!change.pressed) break
                 }
             }
         }
     }
+}
 
 @Composable
 private fun Modifier.chartKeys(
@@ -435,7 +509,11 @@ fun WebHourlyChart(
     nowMillis: Long = System.currentTimeMillis(),
     place: Place? = null,
 ) {
-    val rows = hours.filter { it.timeMillis + CHART_HOUR > nowMillis }.take(48)
+    val rows =
+        remember(hours, nowMillis) {
+            hours.filter { it.timeMillis + CHART_HOUR > nowMillis }.take(48)
+        }
+    val selection = rememberUpdatedState(selectedTime)
     if (rows.size < 2) return
     val face = chartTypeface()
     val ink = MaterialTheme.colorScheme.onSurface
@@ -456,11 +534,17 @@ fun WebHourlyChart(
         val right = if (narrow) 30f else 64f
         val first = rows.first().timeMillis
         val last = rows.last().timeMillis
-        Canvas(
+        CachedNativeChart(
             Modifier.fillMaxWidth()
                 .height(total.dp)
                 .testTag("web_hourly_chart")
-                .semantics { contentDescription = "Temperature and wind for the next 48 hours" }
+                .semantics {
+                    contentDescription = "Temperature and wind for the next 48 hours"
+                    stateDescription =
+                        selectedTime?.let {
+                            "Selected ${chartWeekday(it, zone, nowMillis)} ${chartHour(it, zone, units = units)}"
+                        } ?: "Current forecast"
+                }
                 .webScrub(rows, { select(it) }) { point, width, _ ->
                     val cssX = point.x / density
                     val raw =
@@ -469,9 +553,19 @@ fun WebHourlyChart(
                                 (last - first)
                     (round(raw / CHART_HOUR) * CHART_HOUR).toLong().coerceIn(first, last)
                 }
-                .chartKeys(rows, selectedTime, nowMillis, { select(it) })
-        ) {
-            val canvas = drawContext.canvas.nativeCanvas
+                .chartKeys(rows, selectedTime, nowMillis, { select(it) }),
+            rows,
+            ensemble,
+            units,
+            zone,
+            nowMillis,
+            place,
+            ink,
+            paper,
+            face,
+            density,
+            narrow,
+        ) { canvas, size ->
             canvas.save()
             canvas.scale(density, density)
             val width = size.width / density
@@ -701,73 +795,79 @@ fun WebHourlyChart(
                     dashStart += 7f
                 }
             }
-            selectedTime?.let { at ->
-                val r =
-                    rows.firstOrNull { at >= it.timeMillis && at < it.timeMillis + CHART_HOUR }
-                        ?: rows.first()
-                val xx = x(r.timeMillis)
-                canvas.drawLine(xx, 22f, xx, total - 26, stroke(ink.toArgb(), 2f))
-                r.tempF?.let { canvas.drawCircle(xx, y(it), 7f, fill(ink.toArgb())) }
-                val range = ensembleRangeAt(ensemble, r.timeMillis)
-                val sub =
-                    listOfNotNull(
-                            range?.let {
-                                "${chartTemperatureSpan(it.first,it.second,units)}, 8 in 10 runs."
-                            },
-                            "${chartCondition(r,place,r.timeMillis)}, ${chartWind(r,units).let{if(it.startsWith("Calm"))it.lowercase()else "wind $it"}}.",
-                        )
-                        .joinToString(" ")
-                val cw = min(260f, width * .45f)
-                val cardX = if (xx + 18 + cw > width) xx - 18 - cw else xx + 18
-                val textW = cw - 28
-                val subPaint = chartTextPaint(face, paper.toArgb(), 13f, 400)
-                val lines = wrapText(sub, subPaint, textW)
-                val headPaint = chartTextPaint(face, paper.toArgb(), 13f, 500)
-                val heads =
-                    wrapText(
-                        "${chartWeekday(r.timeMillis,zone,nowMillis)} ${chartHour(r.timeMillis,zone,units=units)}",
-                        headPaint,
-                        textW,
-                    )
-                val cardH = 24 + heads.size * 17.55f + 54.6f + lines.size * 18.2f
-                canvas.drawRoundRect(
-                    RectF(cardX, 34f, cardX + cw, 34 + cardH),
-                    4f,
-                    4f,
-                    fill(ink.toArgb()),
-                )
-                var yy = 46f
-                heads.forEach {
-                    canvas.drawText(
-                        it,
-                        cardX + 14,
-                        yy + (17.55f - headPaint.descent() + headPaint.ascent()) / 2 -
-                            headPaint.ascent(),
-                        headPaint,
-                    )
-                    yy += 17.55f
-                }
-                val valuePaint = chartTextPaint(face, paper.toArgb(), 52f, 400, 58)
-                canvas.drawText(
-                    degrees(r.tempF, units),
-                    cardX + 14,
-                    yy + (54.6f - valuePaint.descent() + valuePaint.ascent()) / 2 -
-                        valuePaint.ascent(),
-                    valuePaint,
-                )
-                yy += 54.6f
-                lines.forEach {
-                    canvas.drawText(
-                        it,
-                        cardX + 14,
-                        yy + (18.2f - subPaint.descent() + subPaint.ascent()) / 2 -
-                            subPaint.ascent(),
-                        subPaint,
-                    )
-                    yy += 18.2f
-                }
-            }
             canvas.restore()
+            val drawOverlay: (NativeCanvas) -> Unit = { target ->
+                target.save()
+                target.scale(density, density)
+                selection.value?.let { at ->
+                    val r =
+                        rows.firstOrNull { at >= it.timeMillis && at < it.timeMillis + CHART_HOUR }
+                            ?: rows.first()
+                    val xx = x(r.timeMillis)
+                    target.drawLine(xx, 22f, xx, total - 26, stroke(ink.toArgb(), 2f))
+                    r.tempF?.let { target.drawCircle(xx, y(it), 7f, fill(ink.toArgb())) }
+                    val range = ensembleRangeAt(ensemble, r.timeMillis)
+                    val sub =
+                        listOfNotNull(
+                                range?.let {
+                                    "${chartTemperatureSpan(it.first,it.second,units)}, 8 in 10 runs."
+                                },
+                                "${chartCondition(r,place,r.timeMillis)}, ${chartWind(r,units).let{if(it.startsWith("Calm"))it.lowercase()else "wind $it"}}.",
+                            )
+                            .joinToString(" ")
+                    val cw = min(260f, width * .45f)
+                    val cardX = if (xx + 18 + cw > width) xx - 18 - cw else xx + 18
+                    val textW = cw - 28
+                    val subPaint = chartTextPaint(face, paper.toArgb(), 13f, 400)
+                    val lines = wrapText(sub, subPaint, textW)
+                    val headPaint = chartTextPaint(face, paper.toArgb(), 13f, 500)
+                    val heads =
+                        wrapText(
+                            "${chartWeekday(r.timeMillis,zone,nowMillis)} ${chartHour(r.timeMillis,zone,units=units)}",
+                            headPaint,
+                            textW,
+                        )
+                    val cardH = 24 + heads.size * 17.55f + 54.6f + lines.size * 18.2f
+                    target.drawRoundRect(
+                        RectF(cardX, 34f, cardX + cw, 34 + cardH),
+                        4f,
+                        4f,
+                        fill(ink.toArgb()),
+                    )
+                    var yy = 46f
+                    heads.forEach {
+                        target.drawText(
+                            it,
+                            cardX + 14,
+                            yy + (17.55f - headPaint.descent() + headPaint.ascent()) / 2 -
+                                headPaint.ascent(),
+                            headPaint,
+                        )
+                        yy += 17.55f
+                    }
+                    val valuePaint = chartTextPaint(face, paper.toArgb(), 52f, 400, 58)
+                    target.drawText(
+                        degrees(r.tempF, units),
+                        cardX + 14,
+                        yy + (54.6f - valuePaint.descent() + valuePaint.ascent()) / 2 -
+                            valuePaint.ascent(),
+                        valuePaint,
+                    )
+                    yy += 54.6f
+                    lines.forEach {
+                        target.drawText(
+                            it,
+                            cardX + 14,
+                            yy + (18.2f - subPaint.descent() + subPaint.ascent()) / 2 -
+                                subPaint.ascent(),
+                            subPaint,
+                        )
+                        yy += 18.2f
+                    }
+                }
+                target.restore()
+            }
+            drawOverlay
         }
     }
 }
@@ -846,6 +946,49 @@ private fun spiralDrop(x: Float, y: Float, r: Float) =
         close()
     }
 
+private data class CachedSpiralSegment(val path: NativePath, val fill: Paint, val edge: Paint)
+
+private data class CachedSpiralDrop(val path: NativePath, val fraction: Double)
+
+private data class CachedWindArrow(
+    val x: Float,
+    val y: Float,
+    val x2: Float,
+    val y2: Float,
+    val head: NativePath,
+) {
+    fun draw(canvas: NativeCanvas, shaftPaint: Paint, headPaint: Paint) {
+        canvas.drawLine(x, y, x2, y2, shaftPaint)
+        canvas.drawPath(head, headPaint)
+    }
+}
+
+private fun cachedWindArrow(
+    x: Float,
+    y: Float,
+    from: Double,
+    len: Float,
+    head: Float,
+): CachedWindArrow {
+    val a = Math.toRadians(from + 180)
+    val ux = sin(a).toFloat()
+    val uy = -cos(a).toFloat()
+    val x2 = x + ux * len
+    val y2 = y + uy * len
+    val bx = x2 - ux * head
+    val by = y2 - uy * head
+    val px = -uy * head * .55f
+    val py = ux * head * .55f
+    val path =
+        NativePath().apply {
+            moveTo(x2 + ux * 1.5f, y2 + uy * 1.5f)
+            lineTo(bx + px, by + py)
+            lineTo(bx - px, by - py)
+            close()
+        }
+    return CachedWindArrow(x, y, x2, y2, path)
+}
+
 /** Web signal.js spiral geometry, observed inside/forecast outside, with the shared hour cursor. */
 @Composable
 fun WebTemperatureSpiral(
@@ -866,9 +1009,16 @@ fun WebTemperatureSpiral(
     val paper = MaterialTheme.colorScheme.surface
     val dark = paper.luminance() < .3f
     val disk = if (dark) Color(0xff262522) else MaterialTheme.colorScheme.surfaceVariant
-    val future = hours.filter { it.timeMillis + CHART_HOUR > nowMillis }.take(26)
+    val future =
+        remember(hours, nowMillis) {
+            hours.filter { it.timeMillis + CHART_HOUR > nowMillis }.take(26)
+        }
     val t0 = nowMillis - 24 * CHART_HOUR
-    val past = history.filter { it.timeMillis + CHART_HOUR > t0 }.sortedBy { it.timeMillis }
+    val past =
+        remember(history, t0) {
+            history.filter { it.timeMillis + CHART_HOUR > t0 }.sortedBy { it.timeMillis }
+        }
+    val selection = rememberUpdatedState(selectedTime)
     val select by rememberUpdatedState(onSelectTime)
     val progress =
         remember(place.id) {
@@ -892,11 +1042,9 @@ fun WebTemperatureSpiral(
             progress.animateTo(1f, tween(2200, easing = CubicBezierEasing(.4f, 0f, .2f, 1f)))
         }
     }
-    val reveal = progress.value
-    val windReveal = windProgress.value
     val last = future.getOrNull(min(future.lastIndex.coerceAtLeast(0), 24))?.timeMillis ?: nowMillis
-    val rowsForKeys = future.take(25)
-    Canvas(
+    val rowsForKeys = remember(future) { future.take(25) }
+    CachedNativeChart(
         modifier
             .fillMaxWidth()
             .aspectRatio(600f / 612f)
@@ -904,6 +1052,10 @@ fun WebTemperatureSpiral(
             .semantics {
                 contentDescription =
                     "The last 24 hours observed and the next 24 forecast, as a spiral colored by temperature"
+                stateDescription =
+                    selectedTime?.let {
+                        "Selected ${chartWeekday(it, zone, nowMillis)} ${chartHour(it, zone, units = units)}"
+                    } ?: "Current forecast"
             }
             .webScrub(place.id, { select(it) }) { point, width, height ->
                 val x = -40 + point.x / width * 600
@@ -926,9 +1078,19 @@ fun WebTemperatureSpiral(
                         ((time / CHART_HOUR) * CHART_HOUR).coerceIn(future.first().timeMillis, last)
                 }
             }
-            .chartKeys(rowsForKeys, selectedTime, nowMillis, { select(it) })
-    ) {
-        val canvas = drawContext.canvas.nativeCanvas
+            .chartKeys(rowsForKeys, selectedTime, nowMillis, { select(it) }),
+        history,
+        hours,
+        observation,
+        place,
+        units,
+        zone,
+        nowMillis,
+        ink,
+        paper,
+        disk,
+        face,
+    ) { canvas, size ->
         canvas.save()
         val scale = size.width / 600f
         canvas.scale(scale, scale)
@@ -1009,18 +1171,6 @@ fun WebTemperatureSpiral(
                     )
                 }
         }
-        selectedTime?.let { at ->
-            wedges
-                .firstOrNull { !it.observed && it.row.timeMillis == (at / CHART_HOUR) * CHART_HOUR }
-                ?.let { hour ->
-                    hour.row.tempF?.let {
-                        canvas.drawPath(
-                            spiralShape(hour.sa, hour.sb, rIn, rOut),
-                            fill(temperatureColor(it).copy(alpha = .4f).toArgb()),
-                        )
-                    }
-                }
-        }
         val pastPoints =
             past.filter { it.tempF != null }.map { it.timeMillis + CHART_HOUR / 2 to it.tempF }
         val futurePoints = future.map { it.timeMillis to it.tempF }
@@ -1052,75 +1202,67 @@ fun WebTemperatureSpiral(
         }
         val outline = NativePath()
         stroke(ink.toArgb(), 44f).apply { strokeCap = Paint.Cap.ROUND }.getFillPath(track, outline)
-        canvas.save()
-        canvas.clipPath(outline)
         val depth = 5.0
         val back = (SPIRAL_HALF_BAND * SPIRAL_HALF_BAND - depth * depth) / (2 * depth)
-        val start = spiralPoint(SPIRAL_INNER.toDouble(), 0.0)
-        canvas.clipOutPath(
+        val startPoint = spiralPoint(SPIRAL_INNER.toDouble(), 0.0)
+        val startCutout =
             NativePath().apply {
                 addCircle(
-                    (start.x - back).toFloat(),
-                    start.y,
+                    (startPoint.x - back).toFloat(),
+                    startPoint.y,
                     (back + depth).toFloat(),
                     NativePath.Direction.CW,
                 )
             }
-        )
         val missing = if (dark) Color(0xff3a3834) else Color(0xffdcd7cb)
-        for (q in 0 until 192) {
-            if (q / 192f > reveal) break
-            val a = q / 4.0
-            val b = min(48.0, (q + 1) / 4.0 + .04)
-            val color = temperature(a + .125)?.let { temperatureColor(it) } ?: missing
-            val segment =
-                spiralShape(
-                    a,
-                    b,
-                    { spiralRadius(it) - SPIRAL_HALF_BAND },
-                    { spiralRadius(it) + SPIRAL_HALF_BAND },
-                    1,
+        val segments =
+            List(192) { q ->
+                val a = q / 4.0
+                val b = min(48.0, (q + 1) / 4.0 + .04)
+                val color =
+                    (temperature(a + .125)?.let { temperatureColor(it) } ?: missing).toArgb()
+                val segment =
+                    spiralShape(
+                        a,
+                        b,
+                        { spiralRadius(it) - SPIRAL_HALF_BAND },
+                        { spiralRadius(it) + SPIRAL_HALF_BAND },
+                        1,
+                    )
+                CachedSpiralSegment(segment, fill(color), stroke(color, .6f))
+            }
+        val endPoint = spiralPoint(SPIRAL_OUTER.toDouble(), 48.0)
+        val endPaint = fill((temperature(47.9)?.let { temperatureColor(it) } ?: missing).toArgb())
+        val rainPaint = fill(precipitationColor(PrecipKind.RAIN, dark).toArgb())
+        val drops = buildList {
+            fun drop(row: WeatherHour, amount: Double?) {
+                val inches = amount ?: return
+                val s = (row.timeMillis - t0).toDouble() / CHART_HOUR
+                if (
+                    inches < .01 ||
+                        s < 0 ||
+                        s >= 48 ||
+                        (s < 24 && row !in past) ||
+                        (s >= 24 && row !in future)
                 )
-            canvas.drawPath(segment, fill(color.toArgb()))
-            canvas.drawPath(segment, stroke(color.toArgb(), .6f))
+                    return
+                val p = spiralPoint(spiralRadius(s + .5), s + .5)
+                val r = (3 + min(1.0, sqrt(inches / .25)) * 5.5).toFloat()
+                add(CachedSpiralDrop(spiralDrop(p.x, p.y, r), s / 48))
+            }
+            past.forEach { if (it.timeMillis < nowMillis) drop(it, it.precipIn) }
+            future.forEach { if (it.timeMillis >= nowMillis) drop(it, it.precipIn) }
         }
-        if (reveal >= .999f) {
-            val end = spiralPoint(SPIRAL_OUTER.toDouble(), 48.0)
-            canvas.drawCircle(
-                end.x,
-                end.y,
-                SPIRAL_HALF_BAND,
-                fill((temperature(47.9)?.let { temperatureColor(it) } ?: missing).toArgb()),
-            )
-        }
-        val rainColor = precipitationColor(PrecipKind.RAIN, dark).toArgb()
-        fun drop(row: WeatherHour, amount: Double?) {
-            val inches = amount ?: return
-            val s = (row.timeMillis - t0).toDouble() / CHART_HOUR
-            if (
-                inches < .01 ||
-                    s < 0 ||
-                    s >= 48 ||
-                    (s < 24 && row !in past) ||
-                    (s >= 24 && row !in future) ||
-                    s / 48 > reveal
-            )
-                return
-            val p = spiralPoint(spiralRadius(s + .5), s + .5)
-            val r = (3 + min(1.0, sqrt(inches / .25)) * 5.5).toFloat()
-            canvas.drawPath(spiralDrop(p.x, p.y, r), fill(rainColor))
-        }
-        past.forEach { if (it.timeMillis < nowMillis) drop(it, it.precipIn) }
-        future.forEach { if (it.timeMillis >= nowMillis) drop(it, it.precipIn) }
-        canvas.restore()
-        val windOpacity = windReveal
-        val windColor =
-            webOklch(if (dark) .74 else .56, .09, 175.0).copy(alpha = windOpacity).toArgb()
-        wedges.forEach { hour ->
+        val windBaseColor = webOklch(if (dark) .74 else .56, .09, 175.0)
+        val windShaftPaint =
+            stroke(windBaseColor.toArgb(), 2f).apply { strokeCap = Paint.Cap.ROUND }
+        val windHeadPaint = fill(windBaseColor.toArgb())
+        val winds = wedges.mapNotNull { hour ->
             val h = hour.row
             val mph = h.windMph
             val dir = h.windFrom
-            if (mph != null && dir != null && mph >= .5) {
+            if (mph == null || dir == null || mph < .5) null
+            else {
                 val sm = (hour.sa + hour.sb) / 2
                 val dep = min(13.0, (rOut(sm) - rIn(sm)) * .45)
                 val p = spiralPoint(rOut(sm) - dep / 2, sm)
@@ -1128,25 +1270,29 @@ fun WebTemperatureSpiral(
                     if (hour.observed) min(6 + min(mph, 30.0) * .5, dep + 4)
                     else 6 + min(mph, 30.0) * 1.2
                 val a = Math.toRadians(dir + 180)
-                drawWind(
-                    canvas,
+                cachedWindArrow(
                     (p.x - sin(a) * len / 2).toFloat(),
                     (p.y + cos(a) * len / 2).toFloat(),
                     dir,
                     len.toFloat(),
                     if (hour.observed) 4.5f else 6f,
-                    windColor,
                 )
             }
         }
+        canvas.restore()
+        val foreground = Picture()
+        val foregroundCanvas =
+            foreground.beginRecording(ceil(size.width).toInt(), ceil(size.height).toInt())
+        foregroundCanvas.scale(scale, scale)
+        foregroundCanvas.translate(40f, 40f)
         val nowPoint = spiralPoint(spiralRadius(24.0), 24.0)
-        canvas.drawCircle(nowPoint.x, nowPoint.y, 7f, fill(paper.toArgb()))
-        canvas.drawCircle(nowPoint.x, nowPoint.y, 7f, stroke(ink.toArgb(), 3f))
+        foregroundCanvas.drawCircle(nowPoint.x, nowPoint.y, 7f, fill(paper.toArgb()))
+        foregroundCanvas.drawCircle(nowPoint.x, nowPoint.y, 7f, stroke(ink.toArgb(), 3f))
         val nowPaint = chartTextPaint(face, ink.toArgb(), 12f, 800, align = Paint.Align.CENTER)
-        drawTrackedText(canvas, "NOW", nowPoint.x, nowPoint.y - 17, nowPaint, 1.5f)
+        drawTrackedText(foregroundCanvas, "NOW", nowPoint.x, nowPoint.y - 17, nowPaint, 1.5f)
         val header = chartTextPaint(face, ink.toArgb(), 12f, 700, align = Paint.Align.CENTER)
-        canvas.drawText("Last 24 h", SPIRAL_C - 46, SPIRAL_C - 56, header)
-        canvas.drawText("Next 24 h", SPIRAL_C + 46, SPIRAL_C - 56, header)
+        foregroundCanvas.drawText("Last 24 h", SPIRAL_C - 46, SPIRAL_C - 56, header)
+        foregroundCanvas.drawText("Next 24 h", SPIRAL_C + 46, SPIRAL_C - 56, header)
         val ahead = future.filter {
             it.timeMillis + CHART_HOUR > nowMillis && it.timeMillis < nowMillis + 24 * CHART_HOUR
         }
@@ -1176,34 +1322,81 @@ fun WebTemperatureSpiral(
             )
         values.forEachIndexed { i, (label, a, b) ->
             val yy = SPIRAL_C - 18 + i * 44
-            canvas.drawText(
+            foregroundCanvas.drawText(
                 a,
                 SPIRAL_C - 46,
                 yy,
                 chartTextPaint(face, ink.toArgb(), 28f, 820, 56, Paint.Align.CENTER),
             )
-            canvas.drawText(
+            foregroundCanvas.drawText(
                 b,
                 SPIRAL_C + 46,
                 yy,
                 chartTextPaint(face, ink.toArgb(), 28f, 820, 56, Paint.Align.CENTER),
             )
-            canvas.drawText(
+            foregroundCanvas.drawText(
                 label,
                 SPIRAL_C,
                 yy + 15,
                 chartTextPaint(face, ink.toArgb(), 12f, 600, align = Paint.Align.CENTER),
             )
         }
-        selectedTime?.let { at ->
-            val s0 = 24 + (at - nowMillis).toDouble() / CHART_HOUR
-            if (s0 >= 23 && s0 <= 48) {
-                val sv = min(47.9, (max(24.0, s0) + min(48.0, s0 + 1)) / 2)
-                val p = spiralPoint(spiralRadius(sv), sv)
-                canvas.drawCircle(p.x, p.y, 8f, stroke(ink.toArgb(), 2.5f))
+        foreground.endRecording()
+        val selectionPaint = stroke(ink.toArgb(), 2.5f)
+        val drawOverlay: (NativeCanvas) -> Unit = { target ->
+            // Animation reads stay in the draw phase; the composition and cached geometry sleep.
+            val reveal = progress.value
+            val windReveal = windProgress.value
+            target.save()
+            target.scale(scale, scale)
+            target.translate(40f, 40f)
+            selection.value?.let { at ->
+                wedges
+                    .firstOrNull {
+                        !it.observed && it.row.timeMillis == (at / CHART_HOUR) * CHART_HOUR
+                    }
+                    ?.let { hour ->
+                        hour.row.tempF?.let {
+                            target.drawPath(
+                                spiralShape(hour.sa, hour.sb, rIn, rOut),
+                                fill(temperatureColor(it).copy(alpha = .4f).toArgb()),
+                            )
+                        }
+                    }
             }
+            target.save()
+            target.clipPath(outline)
+            target.clipOutPath(startCutout)
+            for (q in segments.indices) {
+                if (q / 192f > reveal) break
+                val segment = segments[q]
+                target.drawPath(segment.path, segment.fill)
+                target.drawPath(segment.path, segment.edge)
+            }
+            if (reveal >= .999f)
+                target.drawCircle(endPoint.x, endPoint.y, SPIRAL_HALF_BAND, endPaint)
+            for (drop in drops) if (drop.fraction <= reveal) target.drawPath(drop.path, rainPaint)
+            target.restore()
+            val windColor = windBaseColor.copy(alpha = windReveal).toArgb()
+            windShaftPaint.color = windColor
+            windHeadPaint.color = windColor
+            for (arrow in winds) arrow.draw(target, windShaftPaint, windHeadPaint)
+            target.restore()
+            target.drawPicture(foreground)
+            target.save()
+            target.scale(scale, scale)
+            target.translate(40f, 40f)
+            selection.value?.let { at ->
+                val s0 = 24 + (at - nowMillis).toDouble() / CHART_HOUR
+                if (s0 >= 23 && s0 <= 48) {
+                    val sv = min(47.9, (max(24.0, s0) + min(48.0, s0 + 1)) / 2)
+                    val p = spiralPoint(spiralRadius(sv), sv)
+                    target.drawCircle(p.x, p.y, 8f, selectionPaint)
+                }
+            }
+            target.restore()
         }
-        canvas.restore()
+        drawOverlay
     }
 }
 

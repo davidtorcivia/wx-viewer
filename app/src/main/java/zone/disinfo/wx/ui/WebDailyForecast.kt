@@ -303,6 +303,7 @@ private fun HourlyDayRibbon(rows: List<WeatherHour>, units: DisplayUnits, zone: 
                     fontVariationSettings = "'wght' $weight, 'wdth' $width"
                     textSize = sizeSp * d
                     this.color = color.toArgb()
+                    textAlign = Paint.Align.CENTER
                 }
             c.drawText(value, x, y - p.fontMetrics.ascent, p)
         }
@@ -314,7 +315,7 @@ private fun HourlyDayRibbon(rows: List<WeatherHour>, units: DisplayUnits, zone: 
                 androidx.compose.ui.geometry.Size(w, 26 * d),
             )
             if (i % 3 == 0)
-                text(degrees(r.tempF, units), x + 3 * d, 5 * d, 12f, 800, 64f, Color(0xff141312))
+                text(degrees(r.tempF, units), x + w / 2, 5 * d, 12f, 800, 64f, Color(0xff141312))
             drawRect(
                 ink.copy(alpha = .06f),
                 androidx.compose.ui.geometry.Offset(x, 29 * d),
@@ -340,7 +341,7 @@ private fun HourlyDayRibbon(rows: List<WeatherHour>, units: DisplayUnits, zone: 
                 )
             }
             if (i % 3 == 0)
-                text(units.hourOf(r.timeMillis, zone), x + 2 * d, 79 * d, 11f, 600, 96f, ink)
+                text(units.hourOf(r.timeMillis, zone), x + w / 2, 79 * d, 11f, 600, 96f, ink)
         }
     }
 }

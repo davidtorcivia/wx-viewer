@@ -1,5 +1,8 @@
 package zone.disinfo.wx.ui
 
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.CubicBezierEasing
@@ -59,7 +62,20 @@ fun WebWeatherScreen(
     val place = state.place ?: return
     val forecast = state.forecast
     val units = state.settings.displayUnits
-    val now = System.currentTimeMillis()
+    val clockMinute by
+        produceState(System.currentTimeMillis() / 60_000L, place.id) {
+            while (true) {
+                val time = System.currentTimeMillis()
+                value = time / 60_000L
+                kotlinx.coroutines.delay(60_000L - time % 60_000L)
+            }
+        }
+    // Shared cursors must not move "now" and invalidate every chart during a scrub.
+    // Refresh the snapshot with live data and at each minute boundary instead.
+    val now =
+        remember(clockMinute, forecast, state.history, state.rainNowcast) {
+            System.currentTimeMillis()
+        }
     val zone = forecast?.timeZone ?: "UTC"
     val rows =
         remember(forecast, now / WX_HOUR) {
@@ -72,15 +88,31 @@ fun WebWeatherScreen(
             mutableStateOf<List<ChartEnsemblePoint>>(emptyList())
         }
     val listState = rememberLazyListState()
-    LaunchedEffect(state.settings.serverUrl, forecast?.station) {
-        ensemble =
-            try {
-                EnsembleRepository.temperature(state.settings.serverUrl, forecast?.station)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                emptyList()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle, state.settings.serverUrl, forecast?.station, state.networkAvailability) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            val station = forecast?.station
+            if (station == null || (station.km ?: Double.POSITIVE_INFINITY) > 40) {
+                ensemble = emptyList()
+                return@repeatOnLifecycle
             }
+            try {
+                EnsembleRepository.observe(
+                        state.settings.serverUrl,
+                        station.id,
+                        "refs",
+                        EnsembleCycle.latest("refs"),
+                        "3hrly-TMP",
+                    )
+                    .collect {
+                        ensemble = it.chartPoints()
+                    }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                /* Preserve a cached overlay when a refresh cannot connect. */
+            }
+        }
     }
     val clearSelection by
         rememberUpdatedState<() -> Unit>({
@@ -137,7 +169,7 @@ fun WebWeatherScreen(
                     },
         ) {
             if (showSavedStatus)
-                item {
+                item(key = "saved_status", contentType = "status") {
                     Row(
                         Modifier.fillMaxWidth()
                             .background(ink.copy(alpha = .06f))
@@ -145,14 +177,30 @@ fun WebWeatherScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         val status =
-                            if (state.cached)
-                                "Saved ${forecast?.fetchedAt?.let{units.timeOf(it,zone)}?:"weather"} · ${if(state.loading)"updating"else"offline"}"
-                            else state.error ?: "Weather unavailable"
+                            if (state.cached && forecast != null) {
+                                val minutes = ((now - forecast.fetchedAt).coerceAtLeast(0) / 60_000)
+                                val age =
+                                    when {
+                                        minutes < 1 -> "just now"
+                                        minutes < 60 -> "${minutes}m ago"
+                                        minutes < 24 * 60 -> "${minutes / 60}h ago"
+                                        else -> "${minutes / (24 * 60)}d ago"
+                                    }
+                                val phase =
+                                    when {
+                                        state.loading -> "updating"
+                                        state.networkAvailability == NetworkAvailability.OFFLINE ->
+                                            "offline"
+                                        state.error != null -> "update unavailable"
+                                        else -> null
+                                    }
+                                "Saved $age" + (phase?.let { " · $it" } ?: "")
+                            } else state.error ?: "Weather unavailable"
                         WebText(status, 12f, weight = 500, modifier = Modifier.weight(1f))
                         TextButton(onClick = onRefresh) { WebText("Retry", 12f, weight = 600) }
                     }
                 }
-            item {
+            item(key = "hero", contentType = "hero") {
                 val current = forecast?.let(::observationRow)
                 val selected = selectedTime?.let { weatherRowAt(forecast?.hours.orEmpty(), it) }
                 val live = state.rainNowcast?.takeIf { it.isFresh(now) }
@@ -174,11 +222,16 @@ fun WebWeatherScreen(
                         }
                     }
                 val brush =
-                    if (stops.size >= 2) Brush.horizontalGradient(*stops.toTypedArray())
-                    else
-                        Brush.horizontalGradient(
-                            listOf(heroColor(current?.tempF, dark), heroColor(current?.tempF, dark))
-                        )
+                    remember(stops, current?.tempF, dark) {
+                        if (stops.size >= 2) Brush.horizontalGradient(*stops.toTypedArray())
+                        else
+                            Brush.horizontalGradient(
+                                listOf(
+                                    heroColor(current?.tempF, dark),
+                                    heroColor(current?.tempF, dark),
+                                )
+                            )
+                    }
                 Box(Modifier.fillMaxWidth().heightIn(min = heroMinimum).background(brush)) {
                     Row(Modifier.fillMaxWidth().height(10.dp).align(Alignment.TopCenter)) {
                         rows.take(24).forEach { r ->
@@ -308,7 +361,7 @@ fun WebWeatherScreen(
                 }
             }
             if (state.warnings.isNotEmpty())
-                item {
+                item(key = "warnings", contentType = "warnings") {
                     Column(
                         Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -319,7 +372,7 @@ fun WebWeatherScreen(
                     }
                 }
             if (forecast != null) {
-                item {
+                item(key = "spiral", contentType = "spiral") {
                     WebTemperatureSpiral(
                         state.history?.hours.orEmpty(),
                         forecast.hours,
@@ -336,7 +389,7 @@ fun WebWeatherScreen(
                         nowMillis = now,
                     )
                 }
-                item {
+                item(key = "conditions", contentType = "conditions") {
                     WebConditionCells(
                         forecast,
                         place,
@@ -350,9 +403,9 @@ fun WebWeatherScreen(
                     )
                 }
                 if (rows.size >= 2)
-                    item {
+                    item(key = "hourly", contentType = "hourly") {
                         WebHourlyChart(
-                            rows.take(48),
+                            rows,
                             selectedTime,
                             {
                                 selectedTime = it
@@ -367,7 +420,7 @@ fun WebWeatherScreen(
                         )
                     }
                 if (forecast.days.isNotEmpty())
-                    item {
+                    item(key = "daily", contentType = "daily") {
                         WebDailyForecast(
                             forecast,
                             units,
@@ -375,7 +428,7 @@ fun WebWeatherScreen(
                             now,
                         )
                     }
-                item {
+                item(key = "radar_plumes", contentType = "radar_plumes") {
                     Column(
                         Modifier.padding(horizontal = 16.dp).padding(top = 36.dp),
                         verticalArrangement = Arrangement.spacedBy(28.dp),
@@ -396,10 +449,11 @@ fun WebWeatherScreen(
                                 openDetail = null
                                 onFullPlumes(station)
                             },
+                            networkAvailability = state.networkAvailability,
                         )
                     }
                 }
-                item {
+                item(key = "sources", contentType = "sources") {
                     val sources = buildList {
                         forecast.observation?.let {
                             add("Observed ${units.timeOf(it.timeMillis,zone)}, NOAA RTMA")

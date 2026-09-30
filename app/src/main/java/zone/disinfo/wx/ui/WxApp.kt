@@ -29,7 +29,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import zone.disinfo.wx.WxState
 import zone.disinfo.wx.WxViewModel
 import zone.disinfo.wx.data.*
@@ -48,7 +50,7 @@ fun WxTheme(themeMode: ThemeMode = ThemeMode.SYSTEM, content: @Composable () -> 
             ThemeMode.DARK -> true
             ThemeMode.LIGHT -> false
         }
-    val colors =
+    val baseColors =
         if (dark)
             darkColorScheme(
                 primary = Color(0xffefebe2),
@@ -75,6 +77,31 @@ fun WxTheme(themeMode: ThemeMode = ThemeMode.SYSTEM, content: @Composable () -> 
                 outline = Color(0xffaaa69c),
                 secondary = Color(0xff566646),
             )
+    // Complete the tonal roles used by Material menus, dialogs, pickers and controls.
+    val colors =
+        baseColors.copy(
+            primaryContainer = baseColors.surfaceVariant,
+            onPrimaryContainer = baseColors.onSurface,
+            onSecondary = baseColors.surface,
+            secondaryContainer = baseColors.surfaceVariant,
+            onSecondaryContainer = baseColors.onSurface,
+            tertiary = baseColors.primary,
+            onTertiary = baseColors.onPrimary,
+            tertiaryContainer = baseColors.surfaceVariant,
+            onTertiaryContainer = baseColors.onSurface,
+            inverseSurface = baseColors.onSurface,
+            inverseOnSurface = baseColors.surface,
+            inversePrimary = baseColors.surface,
+            outlineVariant = baseColors.onSurface.copy(alpha = .12f),
+            surfaceTint = baseColors.surface,
+            surfaceDim = baseColors.surface,
+            surfaceBright = baseColors.surface,
+            surfaceContainerLowest = baseColors.surface,
+            surfaceContainerLow = baseColors.surface,
+            surfaceContainer = baseColors.surface,
+            surfaceContainerHigh = baseColors.surface,
+            surfaceContainerHighest = baseColors.surfaceVariant,
+        )
     val view = LocalView.current
     SideEffect {
         var context = view.context
@@ -130,6 +157,12 @@ fun WxApp(
         state.settings.serverUrl,
     ) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            launch {
+                NetworkConnectivity.observe(model.getApplication()).collectLatest { availability ->
+                    delay(350)
+                    model.onNetworkChanged(availability)
+                }
+            }
             var requestGeneration = -1
             try {
                 while (isActive) {
@@ -387,6 +420,7 @@ fun WxApp(
                                     radarTime = time
                                     page = "Radar"
                                 },
+                                networkAvailability = state.networkAvailability,
                             )
                         else ->
                             WebWeatherScreen(

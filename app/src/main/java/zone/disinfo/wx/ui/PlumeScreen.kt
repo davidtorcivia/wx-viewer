@@ -50,6 +50,7 @@ import java.time.LocalDate
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -69,6 +70,7 @@ fun PlumeScreen(
     units: DisplayUnits = Units.IMPERIAL,
     initialStation: String? = null,
     onOpenMap: (String, Long) -> Unit = { _, _ -> },
+    networkAvailability: NetworkAvailability = NetworkAvailability.UNKNOWN,
 ) {
     val context = LocalContext.current
     val preferences =
@@ -101,7 +103,10 @@ fun PlumeScreen(
     var refresh by remember { mutableIntStateOf(0) }
     var data by
         remember(serverUrl, model, station, epoch, refresh) {
-            mutableStateOf<Map<PlumeParameter, PlumeBundle>>(emptyMap())
+            mutableStateOf(PlumeParameter.entries.mapNotNull { parameter ->
+                EnsembleRepository.peek(serverUrl, station, model, cycle, parameter.api)
+                    ?.let { parameter to PlumeBundle(it, emptyList()) }
+            }.toMap())
         }
     var failures by
         remember(serverUrl, model, station, epoch, refresh) {
@@ -127,62 +132,56 @@ fun PlumeScreen(
             .putBoolean("knots", knots)
             .apply()
     }
-    LaunchedEffect(serverUrl, model, station, epoch, refresh) {
-        loading = true
-        coroutineScope {
-            PlumeParameter.entries
-                .map { spec ->
-                    async {
-                        try {
-                            val current =
-                                EnsembleRepository.load(
-                                    serverUrl,
-                                    station,
-                                    model,
-                                    cycle,
-                                    spec.api,
-                                    refresh > 0,
-                                )
-                            data = data + (spec to PlumeBundle(current, emptyList()))
-                            val previous = coroutineScope {
-                                (1..3)
-                                    .map { n ->
-                                        async {
-                                            EnsembleRepository.optional(
-                                                    serverUrl,
-                                                    station,
-                                                    model,
-                                                    cycle.previous(n),
-                                                    spec.api,
-                                                )
-                                                ?.let {
-                                                    PriorPlume("${it.cycle.run}Z", it.mean, n - 1)
-                                                }
+    LaunchedEffect(life, serverUrl, model, station, epoch, refresh, networkAvailability) {
+        life.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            loading = data.isEmpty()
+            coroutineScope {
+                PlumeParameter.entries.forEach { spec ->
+                    launch {
+                        val prior = arrayOfNulls<EnsembleData>(3)
+                        fun publish(current: EnsembleData) {
+                            data = data + (spec to PlumeBundle(current,
+                                prior.mapIndexedNotNull { index, item ->
+                                    item?.let { PriorPlume("${it.cycle.run}Z", it.mean, index) }
+                                }))
+                            loading = false
+                            failures = failures - spec
+                        }
+                        coroutineScope {
+                            (1..3).forEach { age ->
+                                launch {
+                                    try {
+                                        EnsembleRepository.observe(serverUrl, station, model,
+                                            cycle.previous(age), spec.api).collect { item ->
+                                            prior[age - 1] = item
+                                            data[spec]?.current?.let(::publish)
                                         }
-                                    }
-                                    .mapNotNull { it.await() }
+                                    } catch (error: CancellationException) { throw error }
+                                    catch (_: Exception) { /* Prior cycles are optional. */ }
+                                }
                             }
-                            data = data + (spec to PlumeBundle(current, previous))
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            failures = failures + (spec to (e.message ?: "No data"))
+                            try {
+                                EnsembleRepository.observe(serverUrl, station, model, cycle,
+                                    spec.api, refresh > 0,
+                                    allowPreviousCycle = following).collect { current -> publish(current) }
+                            } catch (error: CancellationException) { throw error }
+                            catch (error: Exception) {
+                                failures = failures + (spec to (error.message ?: "No data"))
+                            }
                         }
                     }
                 }
-                .forEach { it.await() }
-            if (model == "refs")
-                ptypes =
+                if (model == "refs") launch {
                     try {
-                        EnsembleRepository.precipitationTypes(serverUrl, station, cycle)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
-                        emptyList()
-                    }
+                        EnsembleRepository.observePrecipitationTypes(serverUrl, station, cycle)
+                            .collect { ptypes = it }
+                    } catch (error: CancellationException) { throw error }
+                    catch (_: Exception) { /* Precipitation type overlays are optional. */ }
+                }
+            }
+            loading = false
+            updated = System.currentTimeMillis()
         }
-        loading = false
-        updated = System.currentTimeMillis()
     }
     LaunchedEffect(life, serverUrl, model, station) {
         life.repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -383,6 +382,13 @@ fun PlumeScreen(
                 Spacer(Modifier.width(24.dp))
             }
         }
+        data.values.map { ensembleSavedAge(it.current, minute) }
+            .firstOrNull { it.isNotEmpty() }?.let { savedStatus ->
+                Text(savedStatus, fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                        .testTag("full_ensemble_cache_age"))
+            }
         LazyColumn(Modifier.fillMaxSize().testTag("plumes_scroll")) {
             item {
                 Column(
@@ -697,7 +703,10 @@ private fun FullPlumeChart(
     server: String,
 ) {
     val data = bundle.current
-    val previous = bundle.previous.filter { it.rank in visiblePrior }
+    val previous =
+        remember(bundle.previous, visiblePrior) {
+            bundle.previous.filter { it.rank in visiblePrior }
+        }
     var selected by remember(data, parameter, style) { mutableStateOf<Long?>(null) }
     var release by remember { mutableIntStateOf(0) }
     LaunchedEffect(release) {
@@ -706,7 +715,47 @@ private fun FullPlumeChart(
             selected = null
         }
     }
-    val range = plumeTimeRange(data, false, style, previous)
+    val range =
+        remember(data, style, previous) {
+            plumeTimeRange(data, false, style, previous)
+        }
+    // The cursor only interpolates these prepared series. Filtering members and computing
+    // percentile bands/statistics are forecast work, independent of the selected time.
+    val readoutMembers =
+        remember(data, style) {
+            if (style.mode != "bands")
+                data.series
+                    .filterKeys { name ->
+                        name != "Mean" &&
+                            name != "RRFS" &&
+                            if (name.startsWith("AR")) "ARW" in style.visibleCores
+                            else "NMB" in style.visibleCores
+                    }
+                    .values
+                    .toList()
+            else emptyList()
+        }
+    val readoutBands =
+        remember(data, style) {
+            if (style.mode == "spaghetti") emptyList()
+            else if (data.model == "refs") listOf(data.mean).filter { "Mean" in style.visibleCores }
+            else
+                buildList {
+                    if ("ARW" in style.visibleCores)
+                        add(
+                            memberBand(
+                                data.series.filterKeys { it.startsWith("AR") }.values.toList()
+                            )
+                        )
+                    if ("NMB" in style.visibleCores)
+                        add(
+                            memberBand(
+                                data.series.filterKeys { it.startsWith("MB") }.values.toList()
+                            )
+                        )
+                }
+        }
+    val statistics = remember(data, parameter.total) { data.statistics(!parameter.total) }
     val time =
         selected ?: snapPlumeTime(System.currentTimeMillis()).coerceIn(range.first, range.second)
     val context = LocalContext.current
@@ -786,52 +835,16 @@ private fun FullPlumeChart(
                 ensembleInterpolate(data.mean, time)?.let {
                     PlumeReadoutItem("Mean", fmt(it), color)
                 }
-            val members =
-                if (style.mode != "bands")
-                    data.series
-                        .filterKeys { name ->
-                            name != "Mean" &&
-                                name != "RRFS" &&
-                                if (name.startsWith("AR")) "ARW" in style.visibleCores
-                                else "NMB" in style.visibleCores
-                        }
-                        .values
-                        .mapNotNull { ensembleInterpolate(it, time) }
-                else emptyList()
+            val members = readoutMembers.mapNotNull { ensembleInterpolate(it, time) }
             val ranges =
                 if (members.isNotEmpty()) members
-                else if (style.mode != "spaghetti") {
-                    val bands =
-                        if (data.model == "refs")
-                            listOf(data.mean).filter { "Mean" in style.visibleCores }
-                        else
-                            buildList {
-                                if ("ARW" in style.visibleCores)
-                                    add(
-                                        memberBand(
-                                            data.series
-                                                .filterKeys { it.startsWith("AR") }
-                                                .values
-                                                .toList()
-                                        )
-                                    )
-                                if ("NMB" in style.visibleCores)
-                                    add(
-                                        memberBand(
-                                            data.series
-                                                .filterKeys { it.startsWith("MB") }
-                                                .values
-                                                .toList()
-                                        )
-                                    )
-                            }
-                    bands.flatMap { pts ->
+                else
+                    readoutBands.flatMap { pts ->
                         listOfNotNull(
                             ensembleInterpolate(pts, time) { it.p10 },
                             ensembleInterpolate(pts, time) { it.p90 },
                         )
                     }
-                } else emptyList()
             if (ranges.isNotEmpty())
                 PlumeReadoutItem(
                     if (members.isNotEmpty()) "Range" else "P10–P90",
@@ -882,7 +895,7 @@ private fun FullPlumeChart(
         modifier = Modifier.fillMaxWidth().padding(top = 5.dp),
         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
     )
-    data.statistics(!parameter.total)?.let { stats ->
+    statistics?.let { stats ->
         val values =
             listOf(
                 "Mean ${if(parameter.total)"Total"else"Peak"}" to stats.mean,

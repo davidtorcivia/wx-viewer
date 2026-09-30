@@ -14,9 +14,10 @@ internal class RadarWindParticles(context: Context) : View(context) {
 
     private var grid: RadarGrid? = null
     private var map: MapLibreMap? = null
-    private var legend: RadarFieldLegend? = null
-    private var dark = false
     private val particles = ArrayList<Particle>()
+    private var screenPoints = DoubleArray(0)
+    private var coordinates = DoubleArray(0)
+    private val bandColors = IntArray(16)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeCap = Paint.Cap.ROUND }
     private var trail: Bitmap? = null
     private var trailCanvas: Canvas? = null
@@ -32,14 +33,25 @@ internal class RadarWindParticles(context: Context) : View(context) {
     fun setGrid(grid: RadarGrid?, map: MapLibreMap?, legend: RadarFieldLegend?, dark: Boolean) {
         this.grid = grid
         this.map = map
-        this.legend = legend
-        this.dark = dark
+        for (band in bandColors.indices) {
+            val color = legend?.color((band + .5) * 5) ?: Color.GRAY
+            fun tint(channel: Int) =
+                if (dark) (channel + (255 - channel) * .4).roundToInt()
+                else (channel * .7).roundToInt()
+            bandColors[band] =
+                Color.rgb(tint(Color.red(color)), tint(Color.green(color)), tint(Color.blue(color)))
+        }
         paused = false
+        last = 0
         trail?.eraseColor(Color.TRANSPARENT)
         if (grid == null) {
             particles.clear()
+            trail?.recycle()
+            trail = null
+            trailCanvas = null
             invalidate()
         } else {
+            ensureTrail()
             resetParticles()
             postInvalidateOnAnimation()
         }
@@ -53,6 +65,7 @@ internal class RadarWindParticles(context: Context) : View(context) {
 
     private fun resetParticles() {
         particles.clear()
+        if (grid == null) return
         val density = resources.displayMetrics.density
         val count = (width * height / (density * density * 900)).toInt().coerceIn(0, 1400)
         repeat(count) {
@@ -64,13 +77,25 @@ internal class RadarWindParticles(context: Context) : View(context) {
                 )
             )
         }
+        if (screenPoints.size != count * 2) {
+            screenPoints = DoubleArray(count * 2)
+            coordinates = DoubleArray(count * 2)
+        }
+    }
+
+    private fun ensureTrail() {
+        if (trail == null && grid != null && width > 0 && height > 0) {
+            trail = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            trailCanvas = Canvas(requireNotNull(trail))
+        }
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         trail?.recycle()
-        trail = if (w > 0 && h > 0) Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888) else null
-        trailCanvas = trail?.let { Canvas(it) }
+        trail = null
+        trailCanvas = null
+        ensureTrail()
         resetParticles()
     }
 
@@ -88,29 +113,32 @@ internal class RadarWindParticles(context: Context) : View(context) {
             PorterDuff.Mode.DST_IN,
         )
         val density = resources.displayMetrics.density
-        particles.forEach { p ->
+        particles.forEachIndexed { i, p ->
             if (p.age++ > 100 || p.x < 0 || p.y < 0 || p.x > width || p.y > height) {
                 p.x = Random.nextFloat() * width
                 p.y = Random.nextFloat() * height
                 p.age = 0
             }
-            val ll = map.projection.fromScreenLocation(PointF(p.x, p.y))
-            val u = grid.value(ll.longitude, ll.latitude)
-            val v = grid.value(ll.longitude, ll.latitude, 1)
+            screenPoints[i * 2] = p.x.toDouble()
+            screenPoints[i * 2 + 1] = p.y.toDouble()
+        }
+        // MapLibre returns [latitude, longitude] pairs. Project all particles in one
+        // JNI call instead of allocating a PointF and LatLng for every particle.
+        map.projection.fromScreenLocations(screenPoints, coordinates)
+        particles.forEachIndexed { i, p ->
+            val lat = coordinates[i * 2]
+            val lon = coordinates[i * 2 + 1]
+            val u = grid.value(lon, lat)
+            val v = grid.value(lon, lat, 1)
             if (u == null || v == null) {
                 p.age = 101
-                return@forEach
+                return@forEachIndexed
             }
             val nx = p.x + (u / 2 * .25 * density * dt).toFloat()
             val ny = p.y - (v / 2 * .25 * density * dt).toFloat()
             val mph = hypot(u, v) / 2 * 2.23694
             val band = (mph / 5).toInt().coerceIn(0, 15)
-            val color = legend?.color((band + .5) * 5) ?: Color.GRAY
-            fun tint(channel: Int) =
-                if (dark) (channel + (255 - channel) * .4).roundToInt()
-                else (channel * .7).roundToInt()
-            paint.color =
-                Color.rgb(tint(Color.red(color)), tint(Color.green(color)), tint(Color.blue(color)))
+            paint.color = bandColors[band]
             paint.strokeWidth = (.7f + band * .18f) * density
             target.drawLine(p.x, p.y, nx, ny, paint)
             p.x = nx

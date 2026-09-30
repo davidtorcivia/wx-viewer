@@ -44,6 +44,7 @@ fun SettingsScreen(state: WxState, model: WxViewModel, onClose: () -> Unit, onLo
     var renamingId by rememberSaveable { mutableStateOf<String?>(null) }
     var newName by rememberSaveable { mutableStateOf("") }
     var info by rememberSaveable { mutableStateOf(false) }
+    var confirmClearCache by remember { mutableStateOf(false) }
     fun saveUnits(value: UnitPreferences) =
         model.updateSettings(
             model.state.settings.copy(
@@ -260,6 +261,23 @@ fun SettingsScreen(state: WxState, model: WxViewModel, onClose: () -> Unit, onLo
                     WebText("Save server", weight = 700)
                 }
                 TextButton(
+                    onClick = { confirmClearCache = true },
+                    enabled = !state.clearingCache,
+                    modifier = Modifier.padding(top = 12.dp).testTag("clear_downloaded_data"),
+                ) {
+                    WebText(
+                        if (state.clearingCache) "Clearing downloaded data…"
+                        else "Clear downloaded data",
+                        weight = 600,
+                    )
+                }
+                WebText(
+                    state.cacheClearStatus ?: "Up to 96 MB on this device",
+                    12f,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("downloaded_data_status"),
+                )
+                TextButton(
                     onClick = { info = !info },
                     modifier = Modifier.testTag("settings_info"),
                 ) {
@@ -273,6 +291,26 @@ fun SettingsScreen(state: WxState, model: WxViewModel, onClose: () -> Unit, onLo
             }
         }
     }
+    if (confirmClearCache)
+        AlertDialog(
+            onDismissRequest = { confirmClearCache = false },
+            title = { Text("Clear downloaded data?") },
+            text = { Text("Saved weather and map images will need to download again.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmClearCache = false
+                        model.clearDownloadedData()
+                    },
+                    modifier = Modifier.testTag("confirm_clear_downloaded_data"),
+                ) {
+                    Text("Clear")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClearCache = false }) { Text("Cancel") }
+            },
+        )
     renamingId?.let { id ->
         AlertDialog(
             onDismissRequest = { renamingId = null },
@@ -465,11 +503,23 @@ fun AlertsScreen(
         }
         HorizontalDivider()
         SectionHeading("Where")
+        val locationStatus =
+            when {
+                !settings.locationEnabled -> "Device location is off"
+                !zone.disinfo.wx.location.LocationAccess.foregroundGranted(context) ->
+                    "Location permission required"
+                !settings.backgroundLocationEnabled ->
+                    if (settings.currentPlace == null) "Use your location first"
+                    else "Last refreshed position"
+                !zone.disinfo.wx.location.LocationAccess.backgroundGranted(context) ->
+                    "Moving updates paused · allow location all the time"
+                !zone.disinfo.wx.location.LocationAccess.deviceLocationEnabled(context) ->
+                    "Moving updates paused · device Location is off"
+                else -> "Moving updates ready"
+            }
         SwitchRow(
             "Current location",
-            settings.currentPlace?.let {
-                "${it.name} · ${if(settings.backgroundLocationEnabled) "moving-location mode" else "last refreshed position"}"
-            } ?: "Use your location first",
+            locationStatus,
             alerts.currentLocationEnabled,
             { save(alerts.copy(currentLocationEnabled = it)) },
             enabled =
@@ -491,23 +541,6 @@ fun AlertsScreen(
                 else model.updateSettings(settings.copy(backgroundLocationEnabled = false))
             },
             tag = "background_location",
-        )
-        val locationStatus =
-            when {
-                !settings.locationEnabled -> "Device location is off"
-                !zone.disinfo.wx.location.LocationAccess.foregroundGranted(context) ->
-                    "Current-location alerts paused: location permission required"
-                !settings.backgroundLocationEnabled -> "Last position · refresh within 6 hours"
-                !zone.disinfo.wx.location.LocationAccess.backgroundGranted(context) ->
-                    "Moving updates paused: allow location all the time"
-                !zone.disinfo.wx.location.LocationAccess.deviceLocationEnabled(context) ->
-                    "Moving updates paused: device Location is off"
-                else -> "Moving updates ready · device fix up to 30 min old"
-            }
-        Text(
-            locationStatus,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         if (
             settings.backgroundLocationEnabled &&

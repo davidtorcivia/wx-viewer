@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -102,7 +103,7 @@ internal class NativeRadarNowcast {
 
     private var inputs: Inputs? = null
     private var palette: Pair<String, RadarPixels>? = null
-    private val images = LinkedHashMap<String, RadarNowcastImage>(8, 0.75f, true)
+    private val images = LinkedHashMap<String, RadarNowcastImage>(10, 0.75f, true)
 
     suspend fun render(
         base: String,
@@ -224,7 +225,8 @@ internal class NativeRadarNowcast {
                 // ImageSource copies the image on setImage. Let Android collect evicted bitmaps
                 // rather
                 // than recycling an image that an asynchronous native upload may still reference.
-                while (images.size > 8) images.remove(images.keys.first())
+                // Keep the full ten-step forecast loop, at most ten 512 × 512 bitmaps.
+                while (images.size > 10) images.remove(images.keys.first())
             }
             output
         }
@@ -515,12 +517,41 @@ private class RadarImageHttpException(val status: Int) :
         else "Radar image returned HTTP $status"
     )
 
-private data class RadarPngResponse(val bytes: ByteArray, val crop: String?)
+internal data class RadarPngResponse(val bytes: ByteArray, val crop: String?)
 
 private val radarImageExecutor =
     Executors.newFixedThreadPool(3) { Thread(it, "wx-radar-images").apply { isDaemon = true } }
 
-private suspend fun loadRadarPixels(url: String, needsBounds: Boolean = true): RadarPixels {
+internal suspend fun loadRadarPixels(url: String, needsBounds: Boolean = true): RadarPixels =
+    withContext(Dispatchers.Default) {
+        val packed =
+            RadarAssetCache.get(url) {
+                val response = fetchRadarAsset(url)
+                // Preserve X-Crop alongside the exact PNG. Bounds cannot be guessed from the
+                // request.
+                val output = ByteArrayOutputStream()
+                DataOutputStream(output).use { data ->
+                    data.writeUTF(response.crop.orEmpty())
+                    data.write(response.bytes)
+                }
+                // Validate before retaining a response that a server may have truncated.
+                decodeRadarPng(
+                    response.bytes,
+                    if (needsBounds) RadarBounds.parse(response.crop) else null,
+                )
+                output.toByteArray()
+            }
+        DataInputStream(ByteArrayInputStream(packed)).use { input ->
+            val crop = input.readUTF()
+            decodeRadarPng(input.readBytes(), if (needsBounds) RadarBounds.parse(crop) else null)
+        }
+    }
+
+internal suspend fun fetchRadarAsset(
+    url: String,
+    maxBytes: Int = 5 * 1024 * 1024,
+    accept: String = "image/png",
+): RadarPngResponse {
     val response =
         withTimeoutOrNull(35_000) {
             suspendCancellableCoroutine<RadarPngResponse> { continuation ->
@@ -543,12 +574,12 @@ private suspend fun loadRadarPixels(url: String, needsBounds: Boolean = true): R
                             readTimeout = 25_000
                             instanceFollowRedirects = false
                             useCaches = false
-                            setRequestProperty("Accept", "image/png")
+                            setRequestProperty("Accept", accept)
                             setRequestProperty("User-Agent", "WX-Viewer-Android/1.0")
                         }
                         val code = connection.responseCode
                         if (code !in 200..299) throw RadarImageHttpException(code)
-                        if (connection.contentLengthLong > 5 * 1024 * 1024)
+                        if (connection.contentLengthLong > maxBytes)
                             throw IOException("Radar image is too large")
                         val data = ByteArrayOutputStream()
                         connection.inputStream.use { stream ->
@@ -557,7 +588,7 @@ private suspend fun loadRadarPixels(url: String, needsBounds: Boolean = true): R
                                 if (!continuation.isActive) return@submit
                                 val count = stream.read(buffer)
                                 if (count == -1) break
-                                if (data.size() + count > 5 * 1024 * 1024)
+                                if (data.size() + count > maxBytes)
                                     throw IOException("Radar image is too large")
                                 data.write(buffer, 0, count)
                             }
@@ -583,8 +614,5 @@ private suspend fun loadRadarPixels(url: String, needsBounds: Boolean = true): R
             }
         } ?: throw IOException("Radar image request timed out")
     currentCoroutineContext().ensureActive()
-    return decodeRadarPng(
-        response.bytes,
-        if (needsBounds) RadarBounds.parse(response.crop) else null,
-    )
+    return response
 }

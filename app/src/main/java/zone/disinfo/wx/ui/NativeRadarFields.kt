@@ -4,8 +4,6 @@ import android.graphics.Color
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.zip.GZIPInputStream
 import kotlin.math.*
 import kotlinx.coroutines.Dispatchers
@@ -67,17 +65,14 @@ internal data class RadarGrid(val meta: RadarGridMeta, val bytes: ByteArray) {
         if (c < 0 || r < 0 || c >= meta.nx - 1 || r >= meta.ny - 1) return null
         val o = layer * meta.nx * meta.ny + r * meta.nx + c
         if (o + meta.nx + 1 >= bytes.size) return null
-        val q =
-            intArrayOf(
-                bytes[o].toInt(),
-                bytes[o + 1].toInt(),
-                bytes[o + meta.nx].toInt(),
-                bytes[o + meta.nx + 1].toInt(),
-            )
-        if (-128 in q) return null
+        val q00 = bytes[o].toInt()
+        val q10 = bytes[o + 1].toInt()
+        val q01 = bytes[o + meta.nx].toInt()
+        val q11 = bytes[o + meta.nx + 1].toInt()
+        if (q00 == -128 || q10 == -128 || q01 == -128 || q11 == -128) return null
         val fx = x - c
         val fy = y - r
-        return (q[0] * (1 - fx) + q[1] * fx) * (1 - fy) + (q[2] * (1 - fx) + q[3] * fx) * fy
+        return (q00 * (1 - fx) + q10 * fx) * (1 - fy) + (q01 * (1 - fx) + q11 * fx) * fy
     }
 
     fun standout(lon: Double, lat: Double, size: Double): Pair<Double, Double>? {
@@ -85,18 +80,43 @@ internal data class RadarGrid(val meta: RadarGridMeta, val bytes: ByteArray) {
         val c1 = min(meta.nx - 2, floor((lon + size - meta.west) / meta.step - 1e-9).toInt())
         val r0 = max(0, ceil((meta.north - lat - size) / meta.step + 1e-9).toInt())
         val r1 = min(meta.ny - 2, floor((meta.north - lat) / meta.step).toInt())
-        val points = ArrayList<Triple<Int, Int, Double>>()
+        var count = 0
+        var sum = 0.0
+        var minimum = Double.POSITIVE_INFINITY
+        var maximum = Double.NEGATIVE_INFINITY
+        var minimumCell = 0
+        var maximumCell = 0
         for (r in r0..r1) for (c in c0..c1) {
             val longitude = meta.west + c * meta.step
             val latitude = meta.north - r * meta.step
             val a = value(longitude, latitude) ?: continue
             val v = if (meta.uv) hypot(a, value(longitude, latitude, 1) ?: continue) else a
-            points.add(Triple(c, r, v))
+            val cell = r * meta.nx + c
+            if (v < minimum) {
+                minimum = v
+                minimumCell = cell
+            }
+            if (v > maximum) {
+                maximum = v
+                maximumCell = cell
+            }
+            sum += v
+            count++
         }
-        if (points.isEmpty()) return null
-        val mean = if (meta.peak) 0.0 else points.map { it.third }.average()
-        val point = points.maxBy { abs(it.third - mean) }
-        return (meta.west + point.first * meta.step) to (meta.north - point.second * meta.step)
+        if (count == 0) return null
+        val mean = if (meta.peak) 0.0 else sum / count
+        // The farthest value from the mean must be one of the two extrema. Keep the
+        // earliest row/column on ties, matching maxBy without retaining every cell.
+        val lowDistance = abs(minimum - mean)
+        val highDistance = abs(maximum - mean)
+        val cell =
+            when {
+                lowDistance > highDistance -> minimumCell
+                highDistance > lowDistance -> maximumCell
+                else -> min(minimumCell, maximumCell)
+            }
+        return (meta.west + (cell % meta.nx) * meta.step) to
+            (meta.north - (cell / meta.nx) * meta.step)
     }
 
     fun scalar(lon: Double, lat: Double): Double? {
@@ -118,7 +138,8 @@ internal data class RadarGrid(val meta: RadarGridMeta, val bytes: ByteArray) {
 
 internal suspend fun loadRadarGrid(base: String, frame: RadarFrame): RadarGrid? {
     val meta = frame.grid ?: return null
-    val raw = radarBinary("$base/api/radar/field/${frame.field}/grid.bin?v=3")
+    val url = "$base/api/radar/field/${frame.field}/grid.bin?v=3"
+    val raw = RadarAssetCache.get(url) { radarBinary(url) }
     val decoded =
         withContext(Dispatchers.Default) {
             val bytes =
@@ -144,32 +165,7 @@ internal suspend fun loadRadarGrid(base: String, frame: RadarFrame): RadarGrid? 
 }
 
 internal suspend fun radarBinary(url: String): ByteArray =
-    withContext(Dispatchers.IO) {
-        val parsed = URL(url)
-        require(parsed.protocol == "https" && parsed.userInfo == null && parsed.ref == null)
-        val connection = parsed.openConnection() as HttpURLConnection
-        try {
-            connection.connectTimeout = 12_000
-            connection.readTimeout = 25_000
-            connection.instanceFollowRedirects = false
-            if (connection.responseCode !in 200..299) throw IOException("Weather layer unavailable")
-            connection.inputStream.use { stream ->
-                val out = ByteArrayOutputStream()
-                val buffer = ByteArray(8192)
-                while (true) {
-                    currentCoroutineContext().ensureActive()
-                    val n = stream.read(buffer)
-                    if (n < 0) break
-                    if (out.size() + n > 16 * 1024 * 1024)
-                        throw IOException("Weather layer is too large")
-                    out.write(buffer, 0, n)
-                }
-                out.toByteArray()
-            }
-        } finally {
-            connection.disconnect()
-        }
-    }
+    fetchRadarAsset(url, 16 * 1024 * 1024, "application/octet-stream").bytes
 
 internal fun parseRadarLegend(json: JSONObject?): RadarFieldLegend? {
     json ?: return null
