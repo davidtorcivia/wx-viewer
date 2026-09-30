@@ -8,6 +8,10 @@ import kotlin.math.ceil
 import kotlin.math.floor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.last
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -63,6 +67,8 @@ data class EnsembleData(
     val series: Map<String, List<EnsemblePoint>>,
     val cycle: EnsembleCycle,
     val model: String,
+    val fetchedAt: Long = System.currentTimeMillis(),
+    val fromCache: Boolean = false,
 ) {
     val mean: List<EnsemblePoint>
         get() = series["Mean"].orEmpty()
@@ -102,8 +108,34 @@ data class PrecipTypeHour(val timeMillis: Long, val kind: String?)
 
 /** A timestamp-aligned, bounded shared cache for the overview and full plume screens. */
 object EnsembleRepository {
-    private val lock = Mutex()
-    private val cache = linkedMapOf<String, EnsembleData>()
+    private val cacheLock = Any()
+    // Keep this field and key format stable for device fixture seeding.
+    private val cache = LinkedHashMap<String, EnsembleData>(96, .75f, true)
+    private val networkLocks = Array(32) { Mutex() }
+    private val ptypeCache = LinkedHashMap<String, Pair<List<PrecipTypeHour>, Long>>(24, .75f, true)
+    private const val REFRESH_MILLIS = 15 * 60_000L
+    private const val HOT_BYTES = 12 * 1024 * 1024
+
+    private fun key(server: String, station: String, model: String, cycle: EnsembleCycle,
+                    parameter: String) =
+        "${normalizeServerUrl(server)}/$station/$model/${cycle.epoch}/$parameter"
+
+    fun clearMemoryCache() = synchronized(cacheLock) {
+        cache.clear()
+        ptypeCache.clear()
+    }
+
+    /** Zero disk/JSON work; used by composition to render an already visited chart immediately. */
+    fun peek(server: String, station: String, model: String, cycle: EnsembleCycle,
+             parameter: String): EnsembleData? = synchronized(cacheLock) {
+        val key = key(server, station, model, cycle, parameter)
+        val item = cache[key] ?: return@synchronized null
+        if (cacheAgeMillis(item.fetchedAt) > DisplayCache.MAX_AGE_MILLIS) {
+            cache.remove(key)
+            return@synchronized null
+        }
+        item.copy(fromCache = true)
+    }
 
     suspend fun load(
         server: String,
@@ -112,38 +144,111 @@ object EnsembleRepository {
         cycle: EnsembleCycle,
         parameter: String,
         force: Boolean = false,
-    ): EnsembleData {
+    ): EnsembleData = if (force) observe(server, station, model, cycle, parameter, true).last()
+        else observe(server, station, model, cycle, parameter).first()
+
+    /**
+     * Cached data reaches collectors before any HTTP request. Collection owns refresh lifetime,
+     * so changing screens cancels refresh and cannot publish into a different station/run.
+     */
+    fun observe(
+        server: String,
+        station: String,
+        model: String,
+        cycle: EnsembleCycle,
+        parameter: String,
+        force: Boolean = false,
+        allowPreviousCycle: Boolean = false,
+    ): Flow<EnsembleData> = flow {
+        val identity = key(server, station, model, cycle, parameter)
+        val generation = DisplayCache.generation
+        var saved = cached(server, station, model, cycle, parameter)
+        if (saved == null && allowPreviousCycle) {
+            // Automatic latest views can keep the last downloaded run across a cycle rollover.
+            // Two days covers the ensemble's useful forecast horizon; explicit run views are exact.
+            for (age in 1..8) {
+                saved = cached(server, station, model, cycle.previous(age), parameter)
+                if (saved != null) break
+            }
+        }
+        if (DisplayCache.generation != generation) return@flow
+        if (saved != null) emit(saved!!)
+        val historical = cycle.epoch < EnsembleCycle.latest(model).epoch
+        if (saved != null && saved!!.cycle == cycle && !force &&
+            (historical || cacheAgeMillis(saved!!.fetchedAt) < REFRESH_MILLIS)) return@flow
+        if (!DisplayCache.isOnline()) {
+            if (saved == null) throw IOException("Offline: this ensemble has not been downloaded")
+            return@flow
+        }
+        val fresh = try {
+            val mutex = networkLocks[(identity.hashCode() and Int.MAX_VALUE) % networkLocks.size]
+            mutex.withLock {
+                val newer = synchronized(cacheLock) { cache[identity] }
+                if (newer != null && newer.fetchedAt > (saved?.fetchedAt ?: 0L)) newer
+                else fetch(server, station, model, cycle, parameter, identity, generation)
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            if (saved == null) throw error
+            null
+        }
+        if (fresh != null && DisplayCache.generation == generation) emit(fresh)
+    }
+
+    private suspend fun cached(server: String, station: String, model: String,
+                               cycle: EnsembleCycle, parameter: String): EnsembleData? {
+        peek(server, station, model, cycle, parameter)?.let { return it }
+        val generation = DisplayCache.generation
+        val identity = key(server, station, model, cycle, parameter)
+        val payload = DisplayCache.read("ensemble", identity) ?: return null
+        val data = try {
+            withContext(Dispatchers.Default) {
+                parse(JSONObject(payload.bytes.toString(Charsets.UTF_8)), cycle, model)
+                    .copy(fetchedAt = payload.fetchedAt, fromCache = true)
+            }
+        } catch (error: CancellationException) { throw error }
+        catch (_: Exception) { return null }
+        if (data.series.isEmpty() || DisplayCache.generation != generation) return null
+        remember(identity, data)
+        return data
+    }
+
+    private suspend fun fetch(server: String, station: String, model: String,
+                              cycle: EnsembleCycle, parameter: String, identity: String,
+                              generation: Long): EnsembleData {
         val base = normalizeServerUrl(server)
-        val key = "$base/$station/$model/${cycle.epoch}/$parameter"
-        if (!force)
-            lock
-                .withLock { cache[key] }
-                ?.let {
-                    return it
-                }
-        val response =
-            withContext(Dispatchers.IO) {
-                WeatherHttpClient()
-                    .get(
-                        "$base/api/$model/$station/${cycle.run}/$parameter?date=${cycle.date}",
-                        readTimeoutMs = 130_000,
-                        totalTimeoutMs = 145_000,
-                    )
+        val response = WeatherHttpClient().get(
+            "$base/api/$model/$station/${cycle.run}/$parameter?date=${cycle.date}",
+            readTimeoutMs = 130_000,
+            totalTimeoutMs = 145_000,
+        )
+        if (response.cacheStatus.equals("STALE", ignoreCase = true))
+            throw IOException("The ensemble server is temporarily returning stale data")
+        val fetchedAt = System.currentTimeMillis()
+        val data = withContext(Dispatchers.Default) {
+            val json = try { JSONObject(response.body) }
+            catch (error: Exception) {
+                throw IOException("The ensemble server returned unreadable data", error)
             }
-        val json =
-            try {
-                JSONObject(response.body)
-            } catch (e: Exception) {
-                throw IOException("The ensemble server returned unreadable data", e)
-            }
-        val data = parse(json, cycle, model)
+            parse(json, cycle, model).copy(fetchedAt = fetchedAt)
+        }
         if (data.series.isEmpty())
             throw IOException("No data for $station ${cycle.run}Z ${cycle.date}")
-        lock.withLock {
-            cache[key] = data
-            while (cache.size > 96) cache.remove(cache.keys.first())
+        if (DisplayCache.generation == generation) {
+            remember(identity, data)
+            DisplayCache.write("ensemble", identity, response.body.toByteArray(), fetchedAt,
+                               expectedGeneration = generation)
         }
         return data
+    }
+
+    private fun remember(identity: String, data: EnsembleData) = synchronized(cacheLock) {
+        cache[identity] = data
+        fun estimatedBytes() = cache.values.sumOf { entry ->
+            entry.series.values.sumOf { points -> points.size.toLong() * 80L } + 256L
+        }
+        while (cache.size > 96 || estimatedBytes() > HOT_BYTES) cache.remove(cache.keys.first())
     }
 
     suspend fun optional(
@@ -175,27 +280,73 @@ object EnsembleRepository {
         server: String,
         station: String,
         cycle: EnsembleCycle,
-    ): List<PrecipTypeHour> {
-        val body =
-            withContext(Dispatchers.IO) {
-                WeatherHttpClient()
-                    .get(
-                        "${normalizeServerUrl(server)}/api/refs/$station/${cycle.run}/ptype?date=${cycle.date}",
-                        readTimeoutMs = 130_000,
-                        totalTimeoutMs = 145_000,
-                    )
-                    .body
-            }
-        val array = JSONArray(body)
-        return (0 until array.length()).mapNotNull { i ->
-            val row = array.optJSONObject(i) ?: return@mapNotNull null
-            val kind =
-                listOf("snow", "rain", "zr", "ip")
-                    .maxByOrNull { row.optDouble(it, 0.0) }
-                    ?.takeIf { row.optDouble(it, 0.0) >= .4 }
-            PrecipTypeHour(row.optLong("x"), kind)
+    ): List<PrecipTypeHour> = observePrecipitationTypes(server, station, cycle).first()
+
+    fun observePrecipitationTypes(
+        server: String,
+        station: String,
+        cycle: EnsembleCycle,
+    ): Flow<List<PrecipTypeHour>> = flow {
+        val identity = key(server, station, "refs", cycle, "ptype")
+        val generation = DisplayCache.generation
+        var saved = synchronized(cacheLock) { ptypeCache[identity] }
+            ?.takeIf { cacheAgeMillis(it.second) <= DisplayCache.MAX_AGE_MILLIS }
+        if (saved == null) DisplayCache.read("ensemble", identity)?.let { payload ->
+            saved = try { parseTypes(payload.bytes.toString(Charsets.UTF_8)) to payload.fetchedAt }
+                    catch (error: CancellationException) { throw error }
+                    catch (_: Exception) { null }
         }
+        if (DisplayCache.generation != generation) return@flow
+        saved?.let { emit(it.first) }
+        if (saved != null && (cycle.epoch < EnsembleCycle.latest("refs").epoch ||
+                cacheAgeMillis(saved!!.second) < REFRESH_MILLIS)) return@flow
+        if (!DisplayCache.isOnline()) {
+            if (saved == null) throw IOException("Offline: precipitation types not downloaded")
+            return@flow
+        }
+        val result = try {
+            val mutex = networkLocks[(identity.hashCode() and Int.MAX_VALUE) % networkLocks.size]
+            mutex.withLock {
+                val newer = synchronized(cacheLock) { ptypeCache[identity] }
+                if (newer != null && newer.second > (saved?.second ?: 0L)) newer.first
+                else {
+                    val response = WeatherHttpClient().get(
+                        "${normalizeServerUrl(server)}/api/refs/$station/${cycle.run}/ptype?date=${cycle.date}",
+                        readTimeoutMs = 130_000, totalTimeoutMs = 145_000,
+                    )
+                    if (response.cacheStatus.equals("STALE", ignoreCase = true))
+                        throw IOException("Precipitation types are temporarily stale")
+                    val fetchedAt = System.currentTimeMillis()
+                    val data = parseTypes(response.body)
+                    if (DisplayCache.generation == generation) {
+                        synchronized(cacheLock) {
+                            ptypeCache[identity] = data to fetchedAt
+                            while (ptypeCache.size > 24) ptypeCache.remove(ptypeCache.keys.first())
+                        }
+                        DisplayCache.write("ensemble", identity, response.body.toByteArray(),
+                                           fetchedAt, expectedGeneration = generation)
+                    }
+                    data
+                }
+            }
+        } catch (error: CancellationException) { throw error }
+        catch (error: Exception) { if (saved == null) throw error else null }
+        if (result != null && DisplayCache.generation == generation) emit(result)
     }
+
+    private suspend fun parseTypes(body: String): List<PrecipTypeHour> =
+        withContext(Dispatchers.Default) {
+            val array = JSONArray(body)
+            val kinds = listOf("snow", "rain", "zr", "ip")
+            (0 until array.length()).mapNotNull { i ->
+                val row = array.optJSONObject(i) ?: return@mapNotNull null
+                val time = row.optDouble("x", Double.NaN)
+                if (!time.isFinite() || time <= 0) return@mapNotNull null
+                val kind = kinds.maxByOrNull { row.optDouble(it, 0.0) }
+                    ?.takeIf { row.optDouble(it, 0.0) >= .4 }
+                PrecipTypeHour(time.toLong(), kind)
+            }
+        }
 
     private fun parse(json: JSONObject, cycle: EnsembleCycle, model: String): EnsembleData {
         fun JSONObject.number(key: String) =
