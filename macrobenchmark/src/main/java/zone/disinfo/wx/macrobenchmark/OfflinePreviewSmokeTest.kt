@@ -36,6 +36,7 @@ class OfflinePreviewSmokeTest {
             "Radio changes are restricted to the disposable emulator"
         }
         Configurator.getInstance().waitForIdleTimeout = 0
+        instrumentation.setInTouchMode(true)
         val app = context.packageManager.getApplicationInfo(target, 0)
         check(app.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) {
             "Smoke target must be non-debuggable preview"

@@ -3,6 +3,7 @@ package zone.disinfo.wx.macrobenchmark
 import android.content.ComponentName
 import android.content.Intent
 import android.graphics.Point
+import android.graphics.Rect
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.benchmark.macro.CompilationMode
@@ -20,6 +21,10 @@ import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import java.io.File
 import java.util.regex.Pattern
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Before
@@ -39,6 +44,7 @@ class WeatherPerformanceBenchmark {
     fun configure() {
         // Animated canvases must not make accessibility queries wait for global quiescence.
         Configurator.getInstance().waitForIdleTimeout = 0
+        InstrumentationRegistry.getInstrumentation().setInTouchMode(true)
     }
 
     @Test
@@ -80,9 +86,11 @@ class WeatherPerformanceBenchmark {
         ) {
             val spiral = scrollTo(By.descContains("as a spiral colored by temperature"))
             scrub(spiral, "as a spiral colored by temperature")
-            val hourly = scrollTo(By.desc("Temperature and wind for the next 48 hours"))
+            val hourly =
+                scrollTo(By.desc("Temperature and wind for the next 48 hours"), heightDp = 428f)
             scrub(hourly, "Temperature and wind for the next 48 hours")
-            val compactPlume = scrollTo(By.descContains("Temperature ensemble plume"))
+            val compactPlume =
+                scrollTo(By.descContains("Temperature ensemble plume"), heightDp = 210f)
             scrub(compactPlume)
             repeat(3) { swipePage(up = true) }
             repeat(3) { swipePage(up = false) }
@@ -109,7 +117,7 @@ class WeatherPerformanceBenchmark {
                 device.findObject(By.desc("Play animation"))?.click()
                 SystemClock.sleep(1_000)
                 tapTab("Plumes")
-                val plume = scrollTo(By.descContains("Temperature ensemble plume"))
+                val plume = scrollTo(By.descContains("Temperature ensemble plume"), heightDp = 250f)
                 scrub(plume)
                 tapTab("Weather")
                 awaitLoadedHero()
@@ -135,6 +143,7 @@ class WeatherPerformanceBenchmark {
                 }
                 SystemClock.sleep(50)
             } while (SystemClock.elapsedRealtime() < deadline)
+            captureFailure(device, "minified-smoke-missing-ui")
             error("Minified smoke UI missing: $selector")
         }
         fun tab(label: String) {
@@ -160,7 +169,7 @@ class WeatherPerformanceBenchmark {
         fun selected(label: String) {
             var node: UiObject2? = await(By.text(label))
             repeat(3) {
-                if (node?.isSelected == true) return
+                if (node?.isChecked == true || node?.isSelected == true) return
                 node = node?.parent
             }
             error("Persisted setting is not selected: $label")
@@ -267,89 +276,161 @@ class WeatherPerformanceBenchmark {
         node.click()
     }
 
-    private fun MacrobenchmarkScope.scrollTo(selector: BySelector): UiObject2 {
-        repeat(7) {
-            device
-                .findObject(selector)
-                ?.takeIf { node ->
-                    val b = node.visibleBounds
-                    b.height() > 100 && b.centerY() < device.displayHeight * .8
-                }
-                ?.let {
-                    return it
-                }
-            swipePage(up = true)
+    private fun MacrobenchmarkScope.scrollTo(
+        selector: BySelector,
+        heightDp: Float? = null,
+        heightPx: Int? = null,
+    ): UiObject2 {
+        val density =
+            InstrumentationRegistry.getInstrumentation().context.resources.displayMetrics.density
+        val targetTop = (device.displayHeight * .30).toInt()
+        repeat(16) {
+            val node = device.findObject(selector)
+            if (node != null) {
+                val b = node.visibleBounds
+                val fullHeight =
+                    heightPx
+                        ?: heightDp?.let { (it * density).roundToInt() }
+                        ?: (b.width() * 612.0 / 600).roundToInt()
+                if (b.height() >= fullHeight - 3 && kotlin.math.abs(b.top - targetTop) < 80)
+                    return node
+                val delta =
+                    (targetTop - b.top).coerceIn(
+                        -device.displayHeight / 3,
+                        device.displayHeight / 3,
+                    )
+                if (delta != 0) scrollPageBy(delta)
+            } else scrollPageBy(-device.displayHeight / 3)
+            SystemClock.sleep(100)
         }
-        error("Chart did not enter viewport: $selector")
+        captureFailure(device, "chart-not-visible")
+        error("Complete chart did not enter viewport: $selector")
+    }
+
+    private fun MacrobenchmarkScope.scrollPageBy(delta: Int) {
+        val x = (device.displayWidth / 50).coerceAtLeast(2)
+        val start = Point(x, (device.displayHeight * .60).toInt())
+        val end = Point(x, start.y + delta)
+        check(device.swipe(arrayOf(start, end, end, end), 20)) { "Page swipe injection failed" }
     }
 
     private fun MacrobenchmarkScope.swipePage(up: Boolean) {
         val high = (device.displayHeight * .25).toInt()
         val low = (device.displayHeight * .8).toInt()
-        device.swipe(
-            device.displayWidth / 2,
-            if (up) low else high,
-            device.displayWidth / 2,
-            if (up) high else low,
-            35,
-        )
+        // The 16dp content gutter belongs to the page, outside chart hold recognizers.
+        // A stationary tail avoids a fling that can skip a lazily composed chart.
+        val x = (device.displayWidth / 50).coerceAtLeast(2)
+        val start = Point(x, if (up) low else high)
+        val end = Point(x, if (up) high else low)
+        check(device.swipe(arrayOf(start, end, end, end), 20)) { "Page swipe injection failed" }
     }
 
     private fun MacrobenchmarkScope.scrub(node: UiObject2, stateProbe: String? = null) {
-        val b = node.visibleBounds
-        val y = b.centerY()
-        val left = b.left + b.width() / 5
-        val right = b.right - b.width() / 5
-        fun gesture(start: Int, end: Int) {
-            // Two stationary segments total about250ms (25 steps ×5ms ×2), activating the
-            // baseline180ms hold recognizer. Both builds then receive identical reversals.
-            device.swipe(
-                arrayOf(
-                    Point(start, y),
-                    Point(start, y),
-                    Point(start, y),
-                    Point(end, y),
-                    Point(start, y),
-                    Point(end, y),
-                ),
-                25,
+        var b = node.visibleBounds
+        val chartSelector =
+            By.descContains(stateProbe ?: node.contentDescription.substringBefore("."))
+        val spiral = stateProbe?.contains("as a spiral") == true
+        fun pathFor(b: Rect): List<Point> =
+            if (spiral) {
+                check(b.height() >= b.width() * .99) { "Spiral is clipped: $b" }
+                // The source spiral uses a 600×612 view box translated by (40,40), with
+                // center (260,260). Radius230 stays on the future turn at both endpoints.
+                // A diameter through radius180 would end in history on its left side.
+                (0..8).map { step ->
+                    val angle = PI - step * PI / 8
+                    Point(
+                        b.left + ((300 + 230 * cos(angle)) / 600 * b.width()).roundToInt(),
+                        b.top + ((300 + 230 * sin(angle)) / 612 * b.height()).roundToInt(),
+                    )
+                }
+            } else {
+                listOf(
+                    Point(b.left + b.width() / 5, b.centerY()),
+                    Point(b.right - b.width() / 5, b.centerY()),
+                )
+            }
+        fun gesture(points: List<Point>) {
+            val first = points.first()
+            // Two stationary segments are >=240ms in UIAutomator2.3 (24×5ms each),
+            // activating the baseline180ms recognizer before identical reversals.
+            val motion =
+                listOf(first, first, first) +
+                    points.drop(1) +
+                    points.asReversed().drop(1) +
+                    points.drop(1)
+            check(device.swipe(motion.toTypedArray(), 25)) { "Chart gesture injection failed" }
+        }
+        val time = Pattern.compile("(?i)(mon|tue|wed|thu|fri|sat|sun)\\s+\\d{1,2}:\\d{2}\\s*[ap]m")
+        fun current(): String? =
+            if (stateProbe != null) chartState(stateProbe)
+            else {
+                device
+                    .findObjects(By.text(time))
+                    .filter {
+                        val readout = it.visibleBounds
+                        readout.bottom <= b.top + 40 && b.top - readout.bottom < 350
+                    }
+                    .maxByOrNull { it.visibleBounds.bottom }
+                    ?.text
+            }
+        fun observed(previous: String?): String {
+            val deadline = SystemClock.elapsedRealtime() + 2_000
+            do {
+                val value = current()
+                if (
+                    value != null &&
+                        value != previous &&
+                        (stateProbe == null || value.startsWith("Selected "))
+                )
+                    return value
+                SystemClock.sleep(25)
+            } while (SystemClock.elapsedRealtime() < deadline)
+            error(
+                "Held gesture did not change selected chart time: probe=$stateProbe previous=$previous current=${current()} bounds=$b"
             )
         }
-        fun observed(): String {
-            if (stateProbe != null) {
-                val deadline = SystemClock.elapsedRealtime() + 2_000
-                do {
-                    chartState(stateProbe)
-                        ?.takeIf { it.startsWith("Selected ") }
-                        ?.let {
-                            return it
-                        }
-                    SystemClock.sleep(25)
-                } while (SystemClock.elapsedRealtime() < deadline)
-                error("Held gesture did not select a chart time: $stateProbe")
-            }
-            val time =
-                Pattern.compile("(?i)(mon|tue|wed|thu|fri|sat|sun)\\s+\\d{1,2}:\\d{2}\\s*[ap]m")
-            val candidates =
-                device.findObjects(By.text(time)).filter {
-                    it.visibleBounds.bottom <= b.top + 40 && b.top - it.visibleBounds.bottom < 350
-                }
-            return candidates.maxByOrNull { it.visibleBounds.bottom }?.text
-                ?: error("Plume selected-time readout is not visible")
-        }
+        val path = pathFor(b)
+        val proof =
+            JSONObject()
+                .put("probe", stateProbe ?: "plume visible timestamp")
+                .put("bounds", b.toShortString())
+                .put("path", JSONArray(path.map { "${it.x},${it.y}" }))
         try {
-            gesture(left, right)
-            val first = observed()
-            gesture(right, left)
-            val second = observed()
+            val before = current()
+            proof.put("before", before)
+            gesture(path)
+            val first = observed(before)
+            proof.put("first", first)
+            b = scrollTo(chartSelector, heightPx = b.height()).visibleBounds
+            val reversePath = pathFor(b).asReversed()
+            proof
+                .put("reverseBounds", b.toShortString())
+                .put("reversePath", JSONArray(reversePath.map { "${it.x},${it.y}" }))
+            gesture(reversePath)
+            val second = observed(first)
+            proof.put("second", second)
             check(first != second) {
                 "Chart time did not change across opposite held drags: $first"
             }
+            appendSelectionProof(proof.put("result", "passed"))
         } catch (failure: Throwable) {
-            device.takeScreenshot(File(outputDirectory(), "scrub-selection-failure.png"))
-            device.dumpWindowHierarchy(File(outputDirectory(), "scrub-selection-failure.xml"))
+            proof
+                .put("result", "failed")
+                .put("current", current())
+                .put("failure", failure.toString())
+            appendSelectionProof(proof)
+            captureFailure(device, "scrub-selection-failure")
             throw failure
         }
+    }
+
+    private fun appendSelectionProof(proof: JSONObject) {
+        File(outputDirectory(), "scrub-selections.jsonl").appendText(proof.toString() + "\n")
+    }
+
+    private fun captureFailure(device: UiDevice, name: String) {
+        device.takeScreenshot(File(outputDirectory(), "$name.png"))
+        device.dumpWindowHierarchy(File(outputDirectory(), "$name.xml"))
     }
 
     private fun chartState(description: String): String? {
