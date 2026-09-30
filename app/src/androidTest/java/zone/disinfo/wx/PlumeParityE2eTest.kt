@@ -49,6 +49,7 @@ class PlumeParityE2eTest {
 
     @Before
     fun startActivity() {
+        resetDisplayFixtureCaches()
         original = SettingsStore(context).load()
         SettingsStore(context).save(AppSettings(serverUrl = server))
         val pref = context.getSharedPreferences("ensemble_view", Context.MODE_PRIVATE)

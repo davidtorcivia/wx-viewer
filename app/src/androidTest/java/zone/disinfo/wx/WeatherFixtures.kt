@@ -5,7 +5,18 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
+import zone.disinfo.wx.data.DisplayCache
+import zone.disinfo.wx.data.EnsembleRepository
+import zone.disinfo.wx.data.WeatherRepository
+
+/** These suites run on a disposable emulator; each relative-clock fixture starts isolated. */
+internal fun resetDisplayFixtureCaches() = runBlocking {
+    DisplayCache.clear()
+    WeatherRepository.clearMemoryCache()
+    EnsembleRepository.clearMemoryCache()
+}
 
 /** Test-only values with a relative clock, so device checks do not expire with the captured run. */
 internal fun forecastFixture(

@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
@@ -27,6 +28,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.printToString
 import androidx.compose.ui.text.AnnotatedString
 import androidx.test.core.app.ActivityScenario
@@ -78,6 +80,7 @@ class WeatherAppE2eTest {
 
     @Before
     fun launchWithOfflineForecast() {
+        resetDisplayFixtureCaches()
         instrumentation.setInTouchMode(true)
         // A fixture position is used; permission prevents the real onResume reconciliation
         // from removing it. As with GrantPermissionRule, keep this grant until the emulator
@@ -151,7 +154,13 @@ class WeatherAppE2eTest {
             )
         }
         scenario = ActivityScenario.launch(MainActivity::class.java)
-        compose.waitForIdle()
+        // Disk cache decoding is asynchronous; an idle loading shell is not the loaded screen.
+        compose.waitUntil(30_000) {
+            compose.onAllNodesWithTag("hero_temperature").fetchSemanticsNodes().any { node ->
+                node.config.getOrNull(SemanticsProperties.Text)?.any { it.text.contains("68") } ==
+                    true
+            }
+        }
         compose.onNodeWithTag("weather_overview").assertIsDisplayed()
         compose.onNodeWithTag("hero_temperature").assertTextContains("68", substring = true)
         // A fresh touch-mode launch must not focus/scroll to a below-fold chart.
@@ -368,6 +377,64 @@ class WeatherAppE2eTest {
         compose
             .onNodeWithTag("day_$day")
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+    }
+
+    @Test
+    fun quickScrubsPinSelectionAndVerticalMotionScrolls() {
+        val page = compose.onNodeWithTag("weather_overview")
+        fun selection(tag: String) =
+            compose
+                .onNodeWithTag(tag)
+                .fetchSemanticsNode()
+                .config
+                .getOrNull(SemanticsProperties.StateDescription)
+                .orEmpty()
+        for (tag in listOf("web_temperature_spiral", "web_hourly_chart")) {
+            page.performScrollToNode(hasTestTag(tag))
+            val chart = compose.onNodeWithTag(tag).performScrollTo().assertIsDisplayed()
+            chart.performTouchInput {
+                val y = height * .5f
+                down(Offset(width * .82f, y))
+                moveTo(Offset(width * .28f, y), delayMillis = 24)
+                moveTo(Offset(width * .72f, y), delayMillis = 24)
+                moveTo(Offset(width * .18f, y), delayMillis = 24)
+                up()
+            }
+            // This entire drag finishes before the old 180ms activation delay.
+            val pinned = selection(tag)
+            assertTrue(
+                "Fast horizontal motion must select a forecast on $tag: $pinned",
+                pinned.startsWith("Selected "),
+            )
+            compose.waitForIdle()
+            assertEquals("Finger-up must preserve the last selected time", pinned, selection(tag))
+            val before =
+                page
+                    .fetchSemanticsNode()
+                    .config[SemanticsProperties.VerticalScrollAxisRange]
+                    .value()
+            chart.performTouchInput {
+                val x = width * .5f
+                down(Offset(x, height * .75f))
+                moveTo(Offset(x, height * .55f), delayMillis = 24)
+                moveTo(Offset(x, height * .25f), delayMillis = 24)
+                up()
+            }
+            val after =
+                page
+                    .fetchSemanticsNode()
+                    .config[SemanticsProperties.VerticalScrollAxisRange]
+                    .value()
+            assertTrue("Vertical motion on $tag must scroll the page", after > before)
+            page.performScrollToNode(hasTestTag(tag))
+            compose.onNodeWithTag(tag).performScrollTo()
+            assertEquals(
+                "Vertical page scrolling must not change the pinned forecast",
+                pinned,
+                selection(tag),
+            )
+        }
+        screenshot("weather-fast-scrub-and-vertical-scroll")
     }
 
     /**
