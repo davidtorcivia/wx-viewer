@@ -4,10 +4,10 @@
 
 The source-driven visual parity revision integrates Weather, Radar, compact/full ensemble and settings surfaces. The complete app and test APKs compile; Android lint reports **0 errors and 31 warnings**. All **53 instrumentation scenarios compile**, but the current revision has not yet run on a device. Rendered comparisons with the mobile website remain pending. No exact-visual-match or runtime-pass claim is made for this revision.
 
-The debug APK has version code 3, minimum API 26 and target API 35. The candidate signature, 16 KB ZIP alignment and arm64 native-library alignment are verified. Its development signer matches the earlier previews. Current candidate APK size: 62,640,248 bytes. SHA-256:
+The debug APK has version code 3, minimum API 26 and target API 35. The candidate signature, 16 KB ZIP alignment and arm64 native-library alignment are verified. Its development signer matches the earlier previews. Current candidate APK size: 62,640,961 bytes. SHA-256:
 
 ```
-5d97a27359bf58359841eecf87a4181222cb8c1c26a3fa20000fa79e1453cbc5
+1dc2af2ca28e2655c24acb7f591271a40fad98d7e11efafc319692adf7694365
 ```
 
 This APK is held for rendered review, not a validated replacement for the delivered preview. The known working API 27 AOSP emulator is being used for that review. Its earlier 0.1.1-preview run passed two real-Activity tests: cached Weather/search close-reopen and the synthetic five-phase minute strip, with clean screenshots. An execution interruption ended that process; its AVD was preserved and restarted without wiping.
@@ -19,6 +19,10 @@ Two 0.2.0 API 27 Weather checks passed (dry imminent-panel absence and typed min
 The next published revision (`a48c30f`) completed all 53 accelerated API 35 tests: **52 passed, one failed** on a shadowed detail test tag after its expansion assertion had passed. Rain watch startup/cancellation and plume controls passed. The current candidate moves that generic tag to a wrapper, preserving the specific detail visibility assertion. It also saves device artifacts through AGP's pre-uninstall output directory; previous jobs deleted private screenshots when cleaning up the app, so no modern visual-parity claim can be based on those missing images.
 
 That revision's corrected fresh-launch, dry and wet Weather checks also passed on API 27. The hero no longer jumps below the first screen. Current candidate UI refinements and full-suite results remain pending; older-device font shaping still needs comparison with the modern captures. Test forecast values now use relative timestamps so the device flows do not expire with the captured calendar date.
+
+Revision `1069c2e` also completed all 53 API 35 checks: **52 passed, one failed**, now only because the expanded daily-ribbon tag is nested in its parent's merged semantics. The failure artifact shows the ribbon rendered and reports the matching unmerged node. The current test uses that unmerged node and keeps the expanded-state and visibility assertions. It also explicitly scrolls nested targets into view and captures the actual Radar screen and overlay menu during repeated navigation.
+
+The corrected artifact collection exported 36 app PNGs from API 35, including the hero, condition cells/details, hourly graph, daily rows and plumes. Modern weekday glyphs are correct; API 27 still differs in variable-font shaping. Comparing the measured hero line box exposed Compose's minimum natural font height, so the current candidate explicitly constrains that box to the source 239.2sp while retaining 260sp glyphs. Its exact-head runtime and updated image checks remain pending.
 
 The sections below describe historical 0.1.x checks. A compiled test APK is not a test pass.
 
