@@ -58,7 +58,6 @@ import org.maplibre.android.geometry.LatLngQuad
 import org.maplibre.android.maps.MapLibreMap
 import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
-import org.maplibre.android.snapshotter.MapSnapshotter
 import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.*
 import org.maplibre.android.style.layers.PropertyFactory.*
@@ -1941,7 +1940,7 @@ private class NativeRadarController(
                         session.effectiveRange != range
                 )
                     return@launch
-                val builder = Style.Builder().fromJson(stripped)
+                val builder = Style.Builder()
                 if (image != null) {
                     val b = image.bounds
                     builder.withSource(
@@ -1964,34 +1963,7 @@ private class NativeRadarController(
                 }
                 val bitmap =
                     withTimeout(8_000) {
-                        suspendCancellableCoroutine<android.graphics.Bitmap> { continuation ->
-                            val snapshotter =
-                                MapSnapshotter(
-                                    view.context,
-                                    MapSnapshotter.Options(width, height)
-                                        .withPixelRatio(1f)
-                                        .withCameraPosition(camera)
-                                        .withStyleBuilder(builder)
-                                        .withLogo(false),
-                                )
-                            continuation.invokeOnCancellation {
-                                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                    snapshotter.cancel()
-                                }
-                            }
-                            snapshotter.start(
-                                { snapshot ->
-                                    if (continuation.isActive)
-                                        continuation.resumeWith(Result.success(snapshot.bitmap))
-                                },
-                                { failure ->
-                                    if (continuation.isActive)
-                                        continuation.resumeWith(
-                                            Result.failure(IOException(failure))
-                                        )
-                                },
-                            )
-                        }
+                        renderRadarSnapshot(view.context, width, height, camera, stripped, builder)
                     }
                 if (
                     base == server && session.overlay == overlay && session.effectiveRange == range
