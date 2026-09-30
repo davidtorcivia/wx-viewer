@@ -128,7 +128,8 @@ class BenchmarkFixtureActivity : Activity() {
                     when (parameter) {
                         "3hrly-TMP" -> 4.0
                         "3h-10mWND" -> 3.0
-                        "Total-SNO" -> .4
+                        "Total-SNO",
+                        "3hrly-SNO" -> 0.0
                         else -> .02
                     }
                 val mean =
@@ -166,6 +167,9 @@ class BenchmarkFixtureActivity : Activity() {
                 cache["$server/JFK/$model/${cycle.epoch}/$parameter"] =
                     EnsembleData(series, cycle, model)
             }
+        }
+        check(cache.filterKeys { it.endsWith("/Total-SNO") }.values.none { it.hasSnow() }) {
+            "The dry fixture must keep the Temperature section first"
         }
         val sessionsClass = Class.forName("zone.disinfo.wx.ui.RadarSessions")
         val singleton =
