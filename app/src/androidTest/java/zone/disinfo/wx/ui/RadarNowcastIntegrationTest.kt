@@ -28,6 +28,7 @@ import org.maplibre.android.style.layers.PropertyFactory.rasterFadeDuration
 import org.maplibre.android.style.layers.RasterLayer
 import org.maplibre.android.style.sources.ImageSource
 import zone.disinfo.wx.MainActivity
+import zone.disinfo.wx.deviceArtifactDirectory
 
 /**
  * Device integration: actual data-PNG decode -> motion/projection -> Android Bitmap -> native
@@ -346,7 +347,7 @@ class RadarNowcastIntegrationTest {
     }
 
     private fun save(name: String, bitmap: Bitmap) {
-        val directory = File(context.filesDir, "e2e").apply { mkdirs() }
+        val directory = deviceArtifactDirectory(context)
         File(directory, "$name.png").outputStream().use {
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
         }
