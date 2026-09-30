@@ -21,11 +21,13 @@ import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.printToString
 import androidx.compose.ui.text.AnnotatedString
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -71,6 +73,7 @@ class WeatherAppE2eTest {
     private lateinit var originalSettings: AppSettings
     private lateinit var fixtureSettings: AppSettings
     private lateinit var cacheKey: String
+    private lateinit var fixtureDetailDay: String
     private var previousCached: String? = null
 
     @Before
@@ -113,10 +116,9 @@ class WeatherAppE2eTest {
                 locationEnabled = true,
             )
         store.save(fixtureSettings)
-        val body =
-            instrumentation.context.assets.open("forecast-ui-nyc.json").bufferedReader().use {
-                it.readText()
-            }
+        val fixture = forecastFixture(instrumentation.context, now)
+        fixtureDetailDay = fixture.getJSONArray("daily").getJSONObject(1).getString("date")
+        val body = fixture.toString()
         val place = fixtureSettings.places.single()
         val canonical =
             fixtureSettings.serverUrl +
@@ -159,7 +161,14 @@ class WeatherAppE2eTest {
 
     @After
     fun restoreDeviceState() {
-        if (::scenario.isInitialized) scenario.close()
+        if (::scenario.isInitialized) {
+            runCatching {
+                File(deviceArtifactDirectory(context), "weather-final-${testName.methodName}.txt")
+                    .writeText(compose.onRoot(useUnmergedTree = true).printToString())
+                screenshot("weather-final-${testName.methodName}")
+            }
+            scenario.close()
+        }
         if (::originalSettings.isInitialized) SettingsStore(context).save(originalSettings)
         if (::cacheKey.isInitialized) {
             context
@@ -335,7 +344,7 @@ class WeatherAppE2eTest {
         page.performScrollToNode(hasTestTag("daily_forecast"))
         compose.onNodeWithTag("daily_forecast").assertIsDisplayed()
         screenshot("weather-daily-rows")
-        val day = "2026-10-01" // The fixed NYC fixture's complete hourly day.
+        val day = fixtureDetailDay
         compose.onNodeWithTag("day_$day").performScrollTo().performClick()
         compose
             .onNodeWithTag("day_$day")
@@ -399,7 +408,7 @@ class WeatherAppE2eTest {
 
     private fun screenshot(name: String) {
         compose.waitForIdle()
-        val directory = File(context.filesDir, "e2e").apply { mkdirs() }
+        val directory = deviceArtifactDirectory(context)
         val bitmap = instrumentation.uiAutomation.takeScreenshot() ?: return
         File(directory, "$name.png").outputStream().use {
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)

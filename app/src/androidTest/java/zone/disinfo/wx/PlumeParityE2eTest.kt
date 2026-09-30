@@ -61,12 +61,7 @@ class PlumeParityE2eTest {
             .putString("mode", "bands")
             .putBoolean("knots", true)
             .commit()
-        val fixture =
-            JSONObject(
-                instrumentation.context.assets.open("forecast-ui-nyc.json").bufferedReader().use {
-                    it.readText()
-                }
-            )
+        val fixture = forecastFixture(instrumentation.context)
         fixture.put("station", JSONObject().put("id", "JFK").put("km", 18.7))
         val place = AppSettings().places.single()
         val canonical =
@@ -168,7 +163,7 @@ class PlumeParityE2eTest {
             // Capture the actual final tree/screen before Activity teardown, even on assertion
             // failure.
             runCatching {
-                val dir = File(context.filesDir, "e2e").apply { mkdirs() }
+                val dir = deviceArtifactDirectory(context)
                 File(dir, "plumes-final-${name.methodName}.txt")
                     .writeText(compose.onRoot(useUnmergedTree = true).printToString())
                 screenshot("plumes-final-${name.methodName}-synthetic")
@@ -209,8 +204,25 @@ class PlumeParityE2eTest {
         compose.waitUntil(20_000) {
             compose.onAllNodesWithTag("plume_chart_3hrly-TMP").fetchSemanticsNodes().isNotEmpty()
         }
+        compose.onNodeWithTag("chart_style_bands").assertIsSelected()
+        compose
+            .onNodeWithTag("plume_chart_3hrly-TMP")
+            .assert(
+                SemanticsMatcher.expectValue(
+                    SemanticsProperties.StateDescription,
+                    "Bands · 60-hour forecast horizon",
+                )
+            )
         screenshot("plumes-full-default-synthetic")
-        compose.onNodeWithTag("chart_style_both").performClick()
+        compose.onNodeWithTag("chart_style_both").performClick().assertIsSelected()
+        compose
+            .onNodeWithTag("plume_chart_3hrly-TMP")
+            .assert(
+                SemanticsMatcher.expectValue(
+                    SemanticsProperties.StateDescription,
+                    "Both · 84-hour forecast horizon",
+                )
+            )
         compose.onNodeWithTag("compare_run_1").performClick()
         compose.onNodeWithTag("plume_chart_3hrly-TMP").performScrollTo().performTouchInput {
             swipeLeft()
@@ -282,7 +294,7 @@ class PlumeParityE2eTest {
     private fun screenshot(label: String) {
         compose.waitForIdle()
         val bitmap = instrumentation.uiAutomation.takeScreenshot() ?: error("No screenshot")
-        val dir = File(context.filesDir, "e2e").apply { mkdirs() }
+        val dir = deviceArtifactDirectory(context)
         File(dir, "$label.png").outputStream().use {
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
         }
