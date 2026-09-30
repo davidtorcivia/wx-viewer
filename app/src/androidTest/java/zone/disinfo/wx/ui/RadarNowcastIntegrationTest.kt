@@ -118,6 +118,51 @@ class RadarNowcastIntegrationTest {
     }
 
     @Test
+    fun rgPrecipFlagSnowAndLegacyGrayBothRenderOnNativeMap() = runBlocking {
+        val gray = asset("storm-q.png")
+        val rg = asset("storm-rg-snow-synthetic.png")
+        val copiedGray = asset("storm-gray-rgb-synthetic.png")
+        val motion = asset("motion-east-north.png")
+        val palette = asset("radar-live-palette.png", null)
+        assertEquals(1, gray.channels)
+        assertEquals(3, rg.channels)
+        assertEquals(gray.value(60, 110), rg.value(60, 110, 0))
+        assertEquals(255, rg.value(60, 110, 1))
+        val grayRain = renderRadarAdvection(gray, motion, palette, null, 0)
+        val rgSnow = renderRadarAdvection(rg, motion, palette, null, 0)
+        val copiedGrayRain = renderRadarAdvection(copiedGray, motion, palette, null, 0)
+        val center = projectedPixel(rgSnow, -74.4, 40.4)
+        fun color(row: Int) =
+            Color.argb(
+                palette.value(140, row, 3),
+                palette.value(140, row, 0),
+                palette.value(140, row, 1),
+                palette.value(140, row, 2),
+            )
+        assertEquals(color(0), grayRain.bitmap.getPixel(center.first, center.second))
+        assertEquals(color(0), copiedGrayRain.bitmap.getPixel(center.first, center.second))
+        assertEquals(color(1), rgSnow.bitmap.getPixel(center.first, center.second))
+        // Below half NEXRAD coverage its rain flag must not erase MRMS snow.
+        val partial = ByteArray(rg.width * rg.height * 3)
+        for (i in 0 until rg.width * rg.height) {
+            partial[i * 3] = rg.pixels[i * 3]
+            partial[i * 3 + 1] = 64
+            partial[i * 3 + 2] = 0
+        }
+        val partialRain = RadarPixels(rg.width, rg.height, 3, partial, fixtureBounds)
+        val fallback = renderRadarAdvection(rg, motion, palette, partialRain, 0)
+        assertEquals(color(1), fallback.bitmap.getPixel(center.first, center.second))
+        // Above half coverage NEXRAD rain classification wins, as in the current web shader.
+        for (i in 0 until rg.width * rg.height) partial[i * 3 + 1] = 255.toByte()
+        val covered = renderRadarAdvection(rg, motion, palette, partialRain, 0)
+        assertEquals(color(0), covered.bitmap.getPixel(center.first, center.second))
+        val future = renderRadarAdvection(rg, motion, palette, null, 60)
+        save("radar-rg-snow-observed-synthetic", rgSnow.bitmap)
+        save("radar-rg-snow-plus-60-synthetic", future.bitmap)
+        renderNativeMap(future)
+    }
+
+    @Test
     fun expiredObservedScanCannotRequestAMotionForecast() = runBlocking {
         val renderer = NativeRadarNowcast()
         val scan = Instant.now().epochSecond - 601
