@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
@@ -92,6 +93,7 @@ fun WebWeatherScreen(
     }
     val ink = MaterialTheme.colorScheme.onSurface
     val dark = MaterialTheme.colorScheme.surface.luminance() < .3f
+    val heroLineHeight = with(LocalDensity.current) { 239.2.sp.toDp() }
     val showSavedStatus =
         state.error != null ||
             state.cached && forecast != null && now - forecast.fetchedAt > 15 * 60_000
@@ -213,6 +215,10 @@ fun WebWeatherScreen(
                             820,
                             Modifier.padding(top = 6.dp)
                                 .offset(x = (-10.4).dp)
+                                // CSS permits negative leading; Compose otherwise retains the
+                                // font's 269dp natural line box even with 239.2sp lineHeight.
+                                .height(heroLineHeight)
+                                .wrapContentHeight(Alignment.CenterVertically, unbounded = true)
                                 .testTag("hero_temperature"),
                             lineHeight = 239.2f,
                             maxLines = 1,
