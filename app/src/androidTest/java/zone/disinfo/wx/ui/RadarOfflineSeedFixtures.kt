@@ -2,10 +2,11 @@ package zone.disinfo.wx.ui
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Color
 import androidx.test.platform.app.InstrumentationRegistry
 import java.time.Instant
+import kotlin.math.abs
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertFalse
@@ -14,7 +15,6 @@ import org.maplibre.android.camera.CameraPosition
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngQuad
 import org.maplibre.android.maps.Style
-import org.maplibre.android.snapshotter.MapSnapshotter
 import org.maplibre.android.style.layers.PropertyFactory.rasterFadeDuration
 import org.maplibre.android.style.layers.RasterLayer
 import org.maplibre.android.style.sources.ImageSource
@@ -84,7 +84,6 @@ internal suspend fun nativeRadarFixtureSnapshot(
         assertFalse(stripped.contains("wx-alerts"))
         val builder =
             Style.Builder()
-                .fromJson(stripped)
                 .withSource(
                     ImageSource(
                         "echo",
@@ -97,38 +96,37 @@ internal suspend fun nativeRadarFixtureSnapshot(
                         image.bitmap,
                     )
                 )
-                .withLayer(RasterLayer("echo", "echo").withProperties(rasterFadeDuration(0f)))
-        withTimeout(30_000) {
-            suspendCancellableCoroutine { continuation ->
-                val renderer =
-                    MapSnapshotter(
-                        context,
-                        MapSnapshotter.Options(400, 400)
-                            .withStyleBuilder(builder)
-                            .withPixelRatio(1f)
-                            .withLogo(false)
-                            .withCameraPosition(
-                                CameraPosition.Builder()
-                                    .target(LatLng(bounds.north - 1.1, bounds.west + .6))
-                                    .zoom(8.0)
-                                    .build()
-                            ),
-                    )
-                continuation.invokeOnCancellation {
-                    android.os.Handler(android.os.Looper.getMainLooper()).post {
-                        renderer.cancel()
-                    }
-                }
-                renderer.start(
-                    {
-                        if (continuation.isActive)
-                            continuation.resumeWith(Result.success(it.bitmap))
-                    },
-                    {
-                        if (continuation.isActive)
-                            continuation.resumeWith(Result.failure(AssertionError(it)))
-                    },
+                .withLayerAbove(
+                    RasterLayer("echo", "echo").withProperties(rasterFadeDuration(0f)),
+                    "background",
+                )
+        val snapshot =
+            withTimeout(30_000) {
+                renderRadarSnapshot(
+                    context,
+                    400,
+                    400,
+                    CameraPosition.Builder()
+                        .target(LatLng(bounds.north - 1.1, bounds.west + .6))
+                        .zoom(8.0)
+                        .build(),
+                    stripped,
+                    builder,
                 )
             }
+        // The fixture storm is q=140; its bundled palette entry is opaque (248,187,8).
+        // A transparent/empty bootstrap image must never satisfy the seed or native-GL test.
+        val center = snapshot.getPixel(snapshot.width / 2, snapshot.height / 2)
+        check(
+            Color.alpha(center) == 255 &&
+                abs(Color.red(center) - 248) <= 2 &&
+                abs(Color.green(center) - 187) <= 2 &&
+                abs(Color.blue(center) - 8) <= 2
+        ) {
+            "Native snapshot did not render the fixture radar echo: ${Integer.toHexString(center)}"
         }
+        check(snapshot.getPixel(4, 4) == Color.rgb(16, 24, 32)) {
+            "Native snapshot did not preserve the warning-free background"
+        }
+        snapshot
     }
