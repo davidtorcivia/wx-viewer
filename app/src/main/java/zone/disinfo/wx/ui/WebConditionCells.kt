@@ -327,6 +327,7 @@ fun WebConditionCells(
                             Modifier.padding(top = 8.dp, bottom = 12.dp)
                                 .background(ink.copy(alpha = .06f), RoundedCornerShape(8.dp))
                                 .padding(14.dp)
+                                .testTag("condition_detail")
                         ) {
                             WebConditionDetail(
                                 active.detail!!,
@@ -334,7 +335,7 @@ fun WebConditionCells(
                                 place,
                                 units,
                                 nowMillis,
-                                Modifier.fillMaxWidth().testTag("condition_detail"),
+                                Modifier.fillMaxWidth(),
                             )
                         }
                 }

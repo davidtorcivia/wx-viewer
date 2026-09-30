@@ -15,6 +15,7 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
@@ -23,14 +24,22 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.res.ResourcesCompat
@@ -228,7 +237,11 @@ fun PlumeScreen(
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(end = 12.dp),
                     )
-                PlumePill("?", onClick = { help = true }, modifier = Modifier.testTag("plume_help"))
+                PlumePill(
+                    "?",
+                    onClick = { help = true },
+                    modifier = Modifier.height(38.dp).testTag("plume_help"),
+                )
             }
             Row(
                 Modifier.fillMaxWidth()
@@ -253,7 +266,13 @@ fun PlumeScreen(
                     listOf("JFK", "LGA", "EWR").forEach { id ->
                         PlumePill(id, station == id, { station = id })
                     }
-                    Box(Modifier.width(62.dp).padding(horizontal = 5.dp)) {
+                    Box(
+                        Modifier.width(62.dp)
+                            .height(32.dp)
+                            .background(wash, RoundedCornerShape(50))
+                            .padding(horizontal = 6.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
                         BasicTextField(
                             customStation,
                             {
@@ -262,18 +281,19 @@ fun PlumeScreen(
                             },
                             singleLine = true,
                             textStyle =
-                                TextStyle(
-                                    fontFamily = Anybody,
-                                    fontSize = 16.sp,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                ),
+                                webTextStyle(16f, weight = 700)
+                                    .copy(
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    ),
                             cursorBrush = SolidColor(MaterialTheme.colorScheme.onSurface),
                             modifier = Modifier.testTag("plume_station"),
                         )
                         if (customStation.isEmpty())
-                            Text(
+                            WebText(
                                 "ICAO",
-                                fontSize = 13.sp,
+                                size = 13f,
+                                weight = 500,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                     }
@@ -307,14 +327,18 @@ fun PlumeScreen(
                             .show()
                     },
                     modifier =
-                        Modifier.background(wash, RoundedCornerShape(50)).testTag("plume_date"),
+                        Modifier.height(38.dp)
+                            .background(wash, RoundedCornerShape(50))
+                            .testTag("plume_date"),
                 )
                 Box {
                     PlumePill(
                         "${cycle.run}Z ▾",
                         onClick = { runMenu = true },
                         modifier =
-                            Modifier.background(wash, RoundedCornerShape(50)).testTag("plume_run"),
+                            Modifier.height(38.dp)
+                                .background(wash, RoundedCornerShape(50))
+                                .testTag("plume_run"),
                     )
                     DropdownMenu(runMenu, { runMenu = false }) {
                         (if (model == "refs") listOf("00", "06", "12", "18")
@@ -346,11 +370,15 @@ fun PlumeScreen(
                             )
                         )
                     },
+                    modifier = Modifier.height(38.dp).background(wash, RoundedCornerShape(50)),
                 )
                 PlumePill(
                     "Reload",
                     onClick = { refresh++ },
-                    modifier = Modifier.testTag("reload_plumes"),
+                    modifier =
+                        Modifier.height(38.dp)
+                            .background(wash, RoundedCornerShape(50))
+                            .testTag("reload_plumes"),
                 )
                 Spacer(Modifier.width(24.dp))
             }
@@ -358,15 +386,14 @@ fun PlumeScreen(
         LazyColumn(Modifier.fillMaxSize().testTag("plumes_scroll")) {
             item {
                 Column(
-                    Modifier.fillMaxWidth().padding(top = 8.dp).background(wash).padding(16.dp),
+                    Modifier.fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, top = 8.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(wash)
+                        .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text(
-                        if (data.isEmpty()) if (loading) "Loading forecast…" else "No forecast data"
-                        else plumeSummary(data),
-                        fontSize = 19.sp,
-                        lineHeight = 25.sp,
-                    )
+                    FullPlumeSummary(data, loading)
                     fullPlumeTrend(data, snow)?.let {
                         Text(
                             it,
@@ -379,39 +406,51 @@ fun PlumeScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text(
+                        WebText(
                             "Compare",
-                            fontSize = 12.sp,
+                            size = 13f,
+                            weight = 500,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.align(Alignment.CenterVertically),
                         )
                         (0..2).forEach { rank ->
                             val checked = rank in visiblePrior
                             val dark = MaterialTheme.colorScheme.surface.luminance() < .5f
                             Row(
-                                Modifier.clip(RoundedCornerShape(50))
+                                Modifier.height(32.dp)
+                                    .clip(RoundedCornerShape(50))
                                     .background(
-                                        if (checked) plumeRunColor(rank, dark).copy(alpha = .13f)
+                                        if (checked)
+                                            MaterialTheme.colorScheme.onSurface.copy(
+                                                alpha = if (dark) .14f else .11f
+                                            )
                                         else Color.Transparent
                                     )
-                                    .clickable {
+                                    .toggleable(value = checked, role = Role.Checkbox) { enabled ->
                                         visiblePrior =
-                                            if (checked) visiblePrior - rank
-                                            else visiblePrior + rank
+                                            if (enabled) visiblePrior + rank
+                                            else visiblePrior - rank
                                     }
-                                    .padding(horizontal = 9.dp, vertical = 7.dp)
+                                    .padding(horizontal = 12.dp)
                                     .testTag("compare_run_$rank"),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                horizontalArrangement = Arrangement.spacedBy(7.dp),
                             ) {
-                                Text(
-                                    if (checked) "☑" else "☐",
-                                    fontSize = 14.sp,
-                                    color = plumeRunColor(rank, dark),
+                                Box(
+                                    Modifier.size(16.dp, 4.dp)
+                                        .background(
+                                            plumeRunColor(rank, dark)
+                                                .copy(alpha = if (checked) 1f else .3f),
+                                            RoundedCornerShape(2.dp),
+                                        )
                                 )
-                                Text(
+                                WebText(
                                     "${cycle.previous(rank+1).run}Z",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold,
+                                    size = 13f,
+                                    weight = 700,
+                                    color =
+                                        if (checked) MaterialTheme.colorScheme.onSurface
+                                        else MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
                         }
@@ -420,7 +459,12 @@ fun PlumeScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Text("Chart", fontSize = 12.sp)
+                        WebText(
+                            "Chart",
+                            size = 13f,
+                            weight = 500,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         PlumeSegments {
                             listOf("spaghetti" to "Lines", "bands" to "Bands", "both" to "Both")
                                 .forEach { (key, label) ->
@@ -532,13 +576,19 @@ private fun FullPlumeSection(
             )
             if (section.total)
                 PlumeSegments {
-                    PlumePill("Total", total, { total = true }, compact = true)
+                    PlumePill(
+                        "Total",
+                        total,
+                        { total = true },
+                        compact = true,
+                        modifier = Modifier.height(30.dp),
+                    )
                     PlumePill(
                         "3-Hour",
                         !total,
                         { total = false },
                         compact = true,
-                        modifier = Modifier.testTag("three_hour_${section.name}"),
+                        modifier = Modifier.height(30.dp).testTag("three_hour_${section.name}"),
                     )
                 }
         }
@@ -559,8 +609,20 @@ private fun FullPlumeSection(
                 )
                 if (section == PlumeParameter.WIND)
                     PlumeSegments {
-                        PlumePill("kts", knots, { onKnots(true) }, compact = true)
-                        PlumePill("mph", !knots, { onKnots(false) }, compact = true)
+                        PlumePill(
+                            "kts",
+                            knots,
+                            { onKnots(true) },
+                            compact = true,
+                            modifier = Modifier.height(30.dp),
+                        )
+                        PlumePill(
+                            "mph",
+                            !knots,
+                            { onKnots(false) },
+                            compact = true,
+                            modifier = Modifier.height(30.dp),
+                        )
                     }
                 else
                     Text(
@@ -574,11 +636,12 @@ private fun FullPlumeSection(
                     else listOf("MEM" to "RRFS", "Mean" to "Mean"))
                     .forEach { (key, label) ->
                         val active = key in cores
-                        PlumePill(
-                            "${if(key=="NMB"||key=="MEM")"┄" else "━"} $label",
+                        PlumeCoreChip(
+                            label,
+                            key,
                             active,
-                            { cores = if (active) cores - key else cores + key },
-                            compact = true,
+                            parameter,
+                            onClick = { cores = if (active) cores - key else cores + key },
                             modifier = Modifier.testTag("core_${parameter.api}_$key"),
                         )
                     }
@@ -643,7 +706,7 @@ private fun FullPlumeChart(
             selected = null
         }
     }
-    val range = plumeTimeRange(data, false)
+    val range = plumeTimeRange(data, false, style, previous)
     val time =
         selected ?: snapPlumeTime(System.currentTimeMillis()).coerceIn(range.first, range.second)
     val context = LocalContext.current
@@ -687,26 +750,30 @@ private fun FullPlumeChart(
     Row(
         Modifier.fillMaxWidth()
             .padding(top = 12.dp, bottom = 10.dp)
-            .clip(RoundedCornerShape(6.dp))
+            .height(60.dp)
+            .clip(RoundedCornerShape(8.dp))
             .background(if (selected != null) ink else wash)
-            .padding(start = 12.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+            .padding(start = 12.dp, end = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         val color = if (selected != null) paper else ink
         Column {
             val hours = (time - System.currentTimeMillis()).toDouble() / ENSEMBLE_HOUR
-            Text(
+            WebText(
                 if (selected == null) "Now"
                 else "${if(hours>=0)"+"else"−"}${(abs(hours)*2).roundToInt()/2.0}h",
-                fontSize = 12.sp,
+                size = 12f,
+                weight = 500,
+                lineHeight = 13.8f,
                 color = color.copy(alpha = .72f),
             )
-            Text(
+            WebText(
                 plumeTime(time, "America/New_York", "EEE h:mm a"),
-                fontFamily = webFont(80f, 700),
-                fontSize = 16.sp,
-                fontWeight = FontWeight.Bold,
+                size = 16f,
+                width = 80f,
+                weight = 700,
+                lineHeight = 18.4f,
                 color = color,
             )
         }
@@ -781,18 +848,17 @@ private fun FullPlumeChart(
                 }
             }
         }
-        Text(
-            "Map ›",
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            color = ink,
-            modifier =
-                Modifier.clip(RoundedCornerShape(50))
-                    .background(if (selected != null) paper else wash)
-                    .clickable { onOpenMap(parameter.mapLayer, time / 1000) }
-                    .padding(horizontal = 12.dp, vertical = 9.dp)
-                    .testTag("plume_map_${parameter.api}"),
-        )
+        Box(
+            Modifier.height(34.dp)
+                .clip(RoundedCornerShape(50))
+                .background(if (selected != null) paper else wash)
+                .clickable { onOpenMap(parameter.mapLayer, time / 1000) }
+                .padding(start = 14.dp, end = 8.dp)
+                .testTag("plume_map_${parameter.api}"),
+            contentAlignment = Alignment.Center,
+        ) {
+            WebText("Map ›", size = 13f, weight = 700, color = ink)
+        }
     }
     EnsemblePlot(
         data,
@@ -940,27 +1006,145 @@ private fun PlumeReadoutItem(label: String, value: String, color: Color, swatch:
             horizontalArrangement = Arrangement.spacedBy(5.dp),
         ) {
             if (swatch != null) Box(Modifier.size(12.dp, 3.dp).background(swatch))
-            Text(label, fontSize = 12.sp, color = color.copy(alpha = .72f), maxLines = 1)
+            WebText(
+                label,
+                size = 12f,
+                weight = 500,
+                lineHeight = 13.2f,
+                color = color.copy(alpha = .72f),
+                maxLines = 1,
+            )
         }
-        Text(
+        WebText(
             value,
-            fontFamily = webFont(60f, if (label == "Mean") 800 else 600),
-            fontSize = 21.sp,
-            lineHeight = 23.1.sp,
-            fontWeight = FontWeight(if (label == "Mean") 800 else 600),
+            size = 21f,
+            width = 60f,
+            weight = if (label == "Mean") 800 else 600,
+            lineHeight = 23.1f,
             color = color,
             maxLines = 1,
         )
     }
 }
 
-private fun plumeSummary(data: Map<PlumeParameter, PlumeBundle>): String {
+@Composable
+private fun PlumeCoreChip(
+    label: String,
+    key: String,
+    active: Boolean,
+    parameter: PlumeParameter,
+    onClick: () -> Unit,
+    modifier: Modifier,
+) {
+    val ink = MaterialTheme.colorScheme.onSurface
+    val dark = MaterialTheme.colorScheme.surface.luminance() < .5f
+    val brush =
+        if (parameter == PlumeParameter.TEMPERATURE)
+            Brush.horizontalGradient(
+                listOf(
+                    plumeOklch(if (dark) .68 else .55, .1, 262.0),
+                    plumeOklch(
+                        if (dark) .72 else .62,
+                        if (dark) .16 else .18,
+                        if (dark) 40.0 else 34.0,
+                    ),
+                )
+            )
+        else SolidColor(plumeVariableColor(parameter, dark))
+    Row(
+        modifier
+            .height(34.dp)
+            .clip(RoundedCornerShape(50))
+            .background(
+                if (active) ink.copy(alpha = if (dark) .08f else .06f) else Color.Transparent
+            )
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics { selected = active }
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Canvas(Modifier.size(12.dp, 4.dp)) {
+            val dashed = key == "NMB" || key == "MEM"
+            drawLine(
+                brush,
+                Offset(0f, size.height / 2),
+                Offset(size.width, size.height / 2),
+                strokeWidth =
+                    (if (key == "Mean") 4.dp
+                        else if (key == "MEM") 2.5.dp else if (dashed) 2.dp else 3.dp)
+                        .toPx(),
+                alpha = if (!active) .2f else if (key == "Mean" || key == "MEM") 1f else .5f,
+                pathEffect =
+                    if (dashed) PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx()))
+                    else null,
+            )
+        }
+        WebText(
+            label,
+            size = 13f,
+            weight = 700,
+            color = if (active) ink else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+private data class PlumeSummary(val text: String, val confidence: String? = null)
+
+@Composable
+private fun FullPlumeSummary(data: Map<PlumeParameter, PlumeBundle>, loading: Boolean) {
+    val summary =
+        if (data.isEmpty()) PlumeSummary(if (loading) "Loading forecast…" else "No forecast data")
+        else plumeSummary(data)
+    val ink = MaterialTheme.colorScheme.onSurface
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        val summaryText = buildAnnotatedString {
+            val colon = summary.text.indexOf(':')
+            if (colon >= 0) {
+                withStyle(SpanStyle(fontFamily = webFont(70f, 800), fontWeight = FontWeight(800))) {
+                    append(summary.text.take(colon + 1))
+                }
+                append(summary.text.drop(colon + 1))
+            } else append(summary.text)
+        }
+        Text(summaryText, style = webTextStyle(19f, 92f, 500, 22.8f), color = ink)
+        summary.confidence?.let { verdict ->
+            val strong = verdict == "high confidence"
+            val moderate = verdict == "moderate spread"
+            Box(
+                Modifier.height(26.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(
+                        if (strong) ink
+                        else if (moderate) ink.copy(alpha = .11f) else Color.Transparent
+                    )
+                    .padding(horizontal = if (strong || moderate) 11.dp else 4.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                WebText(
+                    verdict,
+                    size = 13f,
+                    weight = 700,
+                    color =
+                        if (strong) MaterialTheme.colorScheme.surface
+                        else if (moderate) ink else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+private fun plumeSummary(data: Map<PlumeParameter, PlumeBundle>): PlumeSummary {
     val snow = data[PlumeParameter.SNOW]?.current?.statistics(false)
     val rain = data[PlumeParameter.PRECIPITATION]?.current?.statistics(false)
     val snowy = snow != null && snow.high > .5
     val stats =
-        if (snowy) snow else rain?.takeIf { it.high > .1 } ?: return "Dry conditions expected"
-    stats ?: return "Dry conditions expected"
+        if (snowy) snow
+        else rain?.takeIf { it.high > .1 } ?: return PlumeSummary("Dry conditions expected")
+    stats ?: return PlumeSummary("Dry conditions expected")
     val thresholds = if (snowy) 1.0 to 3.0 else .25 to .75
     val confidence =
         when {
@@ -969,7 +1153,10 @@ private fun plumeSummary(data: Map<PlumeParameter, PlumeBundle>): String {
             else -> "low agreement"
         }
     val format = if (snowy) "%.1f" else "%.2f"
-    return "${if(snowy)"Snow"else"Rain"} likely: ${String.format(Locale.US,format,stats.low)}–${String.format(Locale.US,format,stats.high)} in expected  $confidence"
+    return PlumeSummary(
+        "${if(snowy)"Snow"else"Rain"} likely: ${String.format(Locale.US,format,stats.low)}–${String.format(Locale.US,format,stats.high)} in expected",
+        confidence,
+    )
 }
 
 private fun fullPlumeTrend(data: Map<PlumeParameter, PlumeBundle>, snow: Boolean): String? {

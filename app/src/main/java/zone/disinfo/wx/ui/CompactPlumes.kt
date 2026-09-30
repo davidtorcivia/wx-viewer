@@ -34,6 +34,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -381,22 +382,24 @@ internal fun PlumePill(
 ) {
     val ink = MaterialTheme.colorScheme.onSurface
     val paper = MaterialTheme.colorScheme.surface
-    Text(
-        label,
+    Box(
         modifier
+            .heightIn(min = if (compact) 28.dp else 32.dp)
             .clip(RoundedCornerShape(50))
             .background(if (selected) ink else Color.Transparent)
             .clickable(role = Role.Button, onClick = onClick)
             .semantics { this.selected = selected }
-            .padding(
-                horizontal = if (compact) 11.dp else 12.dp,
-                vertical = if (compact) 5.dp else 9.dp,
-            ),
-        color = if (selected) paper else ink,
-        fontSize = 13.sp,
-        fontWeight = FontWeight.SemiBold,
-        maxLines = 1,
-    )
+            .padding(horizontal = if (compact) 11.dp else 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        WebText(
+            label,
+            size = if (compact) 13f else 14f,
+            weight = 600,
+            color = if (selected) paper else MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
+    }
 }
 
 @Composable
@@ -460,7 +463,7 @@ internal fun EnsemblePlot(
         }
     val ink = MaterialTheme.colorScheme.onSurface.toArgb()
     val muted = MaterialTheme.colorScheme.onSurfaceVariant.toArgb()
-    val range = plumeTimeRange(data, compact)
+    val range = plumeTimeRange(data, compact, style, previous)
     val first = range.first
     val last = range.second
     Canvas(
@@ -471,6 +474,11 @@ internal fun EnsemblePlot(
             .semantics {
                 contentDescription =
                     "${parameter.title} ensemble plume. ${plumeTime(first,zone,"EEE h a")} to ${plumeTime(last,zone,"EEE h a")}."
+                if (!compact)
+                    stateDescription =
+                        "${when(style.mode) {"bands" -> "Bands"
+ "spaghetti" -> "Lines"
+ else -> "Both"}} · ${(last-first)/ENSEMBLE_HOUR}-hour forecast horizon"
             }
             .pointerInput(first, last) {
                 detectTapGestures(
@@ -522,9 +530,52 @@ internal fun EnsemblePlot(
     }
 }
 
-internal fun plumeTimeRange(data: EnsembleData, compact: Boolean): Pair<Long, Long> {
-    val points = if (compact) data.mean else data.series.values.flatten()
-    val first = points.minOfOrNull { it.timeMillis } ?: System.currentTimeMillis()
+internal fun plumeTimeRange(
+    data: EnsembleData,
+    compact: Boolean,
+    style: PlumePlotStyle = PlumePlotStyle(),
+    previous: List<PriorPlume> = emptyList(),
+): Pair<Long, Long> {
+    val raw = data.series.values.flatten()
+    val rawFirst = raw.minOfOrNull { it.timeMillis } ?: System.currentTimeMillis()
+    val rawLast = raw.maxOfOrNull { it.timeMillis } ?: rawFirst + ENSEMBLE_HOUR
+    fun visible(name: String) =
+        when {
+            name == "Mean" -> "Mean" in style.visibleCores
+            name.startsWith("AR") -> "ARW" in style.visibleCores
+            name.startsWith("MB") -> "NMB" in style.visibleCores
+            else -> "MEM" in style.visibleCores
+        }
+    val points =
+        if (compact) data.mean
+        else
+            buildList {
+                // Match the datasets Chart.js actually receives for the selected view.
+                data.series
+                    .filterKeys { visible(it) && (style.mode != "bands" || it == "Mean") }
+                    .values
+                    .forEach { addAll(it) }
+                if (style.mode != "spaghetti") {
+                    if (data.model == "sref") {
+                        listOf("ARW" to "AR", "NMB" to "MB")
+                            .filter { it.first in style.visibleCores }
+                            .forEach { (_, prefix) ->
+                                addAll(
+                                    memberBand(
+                                        data.series
+                                            .filterKeys { it.startsWith(prefix) }
+                                            .values
+                                            .toList()
+                                    )
+                                )
+                            }
+                    } else if ("Mean" in style.visibleCores) addAll(data.mean)
+                }
+                previous.forEach { prior ->
+                    addAll(prior.points.filter { it.timeMillis in rawFirst..rawLast })
+                }
+            }
+    val first = points.minOfOrNull { it.timeMillis } ?: rawFirst
     return first to
         (points.maxOfOrNull { it.timeMillis } ?: first + ENSEMBLE_HOUR).coerceAtLeast(first + 1)
 }
@@ -556,7 +607,7 @@ internal fun drawPlumeCanvas(
     val r = w - 12f
     val t = 12f
     val b = h - 26f
-    val (first, last) = plumeTimeRange(data, compact)
+    val (first, last) = plumeTimeRange(data, compact, style, previous)
     fun convert(v: Double) = parameter.convert(v, units, style.knots)
     fun visible(name: String) =
         when {
@@ -877,7 +928,7 @@ internal fun plumeRunColor(rank: Int, dark: Boolean): Color =
         else -> plumeOklch(if (dark) .72 else .5, if (dark) .15 else .17, 300.0)
     }
 
-private fun plumeOklch(l: Double, c: Double, h: Double): Color {
+internal fun plumeOklch(l: Double, c: Double, h: Double): Color {
     val a = c * cos(Math.toRadians(h))
     val b = c * sin(Math.toRadians(h))
     val x = (l + .3963377774 * a + .2158037573 * b).pow(3)

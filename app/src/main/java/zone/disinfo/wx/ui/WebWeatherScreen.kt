@@ -1,6 +1,11 @@
 package zone.disinfo.wx.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -9,7 +14,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -24,7 +32,15 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlin.math.*
 import kotlinx.coroutines.CancellationException
 import zone.disinfo.wx.WxState
 import zone.disinfo.wx.data.*
@@ -247,7 +263,7 @@ fun WebWeatherScreen(
                             .forEachIndexed { index, row ->
                                 val active =
                                     selectedTime?.let {
-                                        it >= row.timeMillis && it < row.timeMillis + 2 * WX_HOUR
+                                        it >= row.timeMillis && it < row.timeMillis + WX_HOUR
                                     } == true
                                 val color = if (active) MaterialTheme.colorScheme.surface else ink
                                 Column(
@@ -400,17 +416,45 @@ fun WebWeatherScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SourceWarning(warning: OfficialAlert, zone: String, units: DisplayUnits, now: Long) {
     var expanded by rememberSaveable(warning.id) { mutableStateOf(false) }
-    val dark = MaterialTheme.colorScheme.surface.luminance() < .3f
+    val paper = MaterialTheme.colorScheme.surface
+    val dark = paper.luminance() < .3f
     val severity = warning.severity.lowercase()
-    val tint =
+    val severityColor =
         when (severity) {
             "extreme",
             "severe" -> if (dark) Color(0xffc2362a) else Color(0xffd8412f)
             "moderate" -> if (dark) Color(0xffc0661c) else Color(0xffec8a2f)
             else -> if (dark) Color(0xffb89a2a) else Color(0xffe7c64a)
+        }
+    // CSS color-mix(in oklch, severity 22%, paper), with shorter-hue interpolation.
+    val background =
+        remember(severityColor, paper) {
+            fun oklch(color: Color): DoubleArray {
+                fun linear(v: Float): Double =
+                    if (v <= .04045f) v / 12.92 else ((v + .055) / 1.055).pow(2.4)
+                val r = linear(color.red)
+                val g = linear(color.green)
+                val b = linear(color.blue)
+                val l = Math.cbrt(.4122214708 * r + .5363325363 * g + .0514459929 * b)
+                val m = Math.cbrt(.2119034982 * r + .6806995451 * g + .1073969566 * b)
+                val ss = Math.cbrt(.0883024619 * r + .2817188376 * g + .6299787005 * b)
+                val lightness = .2104542553 * l + .7936177850 * m - .0040720468 * ss
+                val aa = 1.9779984951 * l - 2.4285922050 * m + .4505937099 * ss
+                val bb = .0259040371 * l + .7827717662 * m - .8086757660 * ss
+                return doubleArrayOf(
+                    lightness,
+                    hypot(aa, bb),
+                    (Math.toDegrees(atan2(bb, aa)) + 360) % 360,
+                )
+            }
+            val a = oklch(paper)
+            val b = oklch(severityColor)
+            val hueDelta = (b[2] - a[2] + 540) % 360 - 180
+            webOklch(a[0] + (b[0] - a[0]) * .22, a[1] + (b[1] - a[1]) * .22, a[2] + hueDelta * .22)
         }
     val parts =
         remember(warning.description) {
@@ -432,36 +476,84 @@ private fun SourceWarning(warning: OfficialAlert, zone: String, units: DisplayUn
             }
         }
     val lead = parts.firstOrNull { it.first == "WHAT" } ?: parts.firstOrNull()
+    val rest = parts.filter { it !== lead }
+    val action =
+        if (rest.isEmpty()) Modifier
+        else
+            Modifier.clickable(role = Role.Button) { expanded = !expanded }
+                .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
     Column(
         Modifier.fillMaxWidth()
-            .background(tint.copy(alpha = if (dark) .18f else .13f), RoundedCornerShape(8.dp))
-            .clickable { expanded = !expanded }
-            .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
-            .padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp),
+            .background(background, RoundedCornerShape(6.dp))
+            .then(action)
+            .padding(horizontal = 18.dp, vertical = 14.dp)
     ) {
-        WebText(warning.title.substringBefore(" issued "), 15f, weight = 700)
-        warning.expiresAt?.let { end ->
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
             WebText(
-                "until ${if(weatherDate(end,zone)==weatherDate(now,zone))units.timeOf(end,zone)+" today" else clock(end,zone,"EEE")+" "+units.timeOf(end,zone)}",
-                12f,
-                weight = 500,
+                warning.title.substringBefore(" issued "),
+                22f,
+                70f,
+                800,
+                Modifier.alignByBaseline(),
             )
+            warning.expiresAt?.let { end ->
+                val until =
+                    if (weatherDate(end, zone) == weatherDate(now, zone))
+                        "${units.timeOf(end,zone)} today"
+                    else "${clock(end,zone,"EEE")} ${units.timeOf(end,zone)}"
+                WebText("until $until", 14f, weight = 500, modifier = Modifier.alignByBaseline())
+            }
         }
-        lead?.let { WebText(it.second, 14f) }
-        if (expanded)
-            parts
-                .filter { it !== lead }
-                .forEach { (label, text) ->
-                    Column {
-                        if (label.isNotBlank())
-                            WebText(
-                                label.lowercase().replaceFirstChar { it.uppercase() },
-                                12f,
-                                weight = 700,
-                            )
-                        WebText(text, 14f)
+        lead?.let {
+            WebText(it.second, 15f, modifier = Modifier.padding(top = 6.dp), lineHeight = 21f)
+        }
+        AnimatedVisibility(
+            expanded && rest.isNotEmpty(),
+            enter =
+                expandVertically(
+                    animationSpec = tween(350, easing = CubicBezierEasing(.2f, .8f, .2f, 1f))
+                ),
+            exit =
+                shrinkVertically(
+                    animationSpec = tween(350, easing = CubicBezierEasing(.2f, .8f, .2f, 1f))
+                ),
+        ) {
+            Column {
+                rest.forEach { (label, text) ->
+                    val paragraph = buildAnnotatedString {
+                        if (label.isNotBlank()) {
+                            withStyle(
+                                SpanStyle(
+                                    fontFamily = webFont(96f, 700),
+                                    fontWeight = FontWeight(700),
+                                )
+                            ) {
+                                append(label.lowercase().replaceFirstChar { it.uppercase() })
+                            }
+                            appendInlineContent("alert-label-gap", " ")
+                        }
+                        append(text)
                     }
+                    Text(
+                        paragraph,
+                        Modifier.padding(top = 10.dp),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = webTextStyle(size = 14f, lineHeight = 20.3f),
+                        inlineContent =
+                            mapOf(
+                                "alert-label-gap" to
+                                    InlineTextContent(
+                                        Placeholder(8.sp, 1.sp, PlaceholderVerticalAlign.Center)
+                                    ) {
+                                        Spacer(Modifier.fillMaxSize())
+                                    }
+                            ),
+                    )
                 }
+            }
+        }
     }
 }

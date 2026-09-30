@@ -324,7 +324,10 @@ private fun RadarView(
         val frames = session.frames.frames
         if (!session.playing || !resumed || frames.size < 2) return@LaunchedEffect
         val mult = listOf(1.0, .5, .25)[session.speed]
-        val observedMrms = frames.first().source == "mrms" && frames.first().field == null
+        val observedMrms =
+            frames.first().source == "mrms" &&
+                !frames.first().satellite &&
+                frames.first().field == null
         if (observedMrms) {
             val newest =
                 frames.lastOrNull { it.leadMinutes == 0 }?.time?.toDouble()
