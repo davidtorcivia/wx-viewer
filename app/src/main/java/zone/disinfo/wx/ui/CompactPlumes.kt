@@ -30,7 +30,9 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -189,6 +191,7 @@ fun CompactPlumes(
                             selected = spec.name
                         },
                         compact = true,
+                        modifier = Modifier.testTag("compact_tab_${spec.name}"),
                     )
                 }
         }
@@ -383,7 +386,8 @@ internal fun PlumePill(
         modifier
             .clip(RoundedCornerShape(50))
             .background(if (selected) ink else Color.Transparent)
-            .clickable(onClick = onClick)
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics { this.selected = selected }
             .padding(
                 horizontal = if (compact) 11.dp else 12.dp,
                 vertical = if (compact) 5.dp else 9.dp,
@@ -594,6 +598,7 @@ internal fun drawPlumeCanvas(
     val paint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
             typeface = font
+            fontFeatureSettings = "tnum"
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
         }

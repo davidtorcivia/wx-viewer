@@ -226,8 +226,8 @@ fun WxApp(
                                                 .background(temperatureColor(temp), CircleShape)
                                         )
                                         WebText(
-                                            (if (place.isCurrent) "⌖ " else "") +
-                                                place.name.substringBefore(','),
+                                            if (place.isCurrent) "Here"
+                                            else place.name.substringBefore(','),
                                             14f,
                                             88f,
                                             500,

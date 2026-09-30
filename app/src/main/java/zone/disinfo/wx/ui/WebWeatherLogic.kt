@@ -121,7 +121,7 @@ internal fun sourceHeadline(
         else it.dbz == null
     }
     val soon =
-        live?.headline(now, units)
+        live?.let { sourceLiveHeadline(it, now, units) }
             ?: when {
                 wet -> "Precipitation detected; type or timing is uncertain"
                 unknown -> "Live precipitation outlook incomplete"
@@ -191,4 +191,41 @@ internal fun webSunAltitude(time: Long, lat: Double, lon: Double): Double {
     val ha = Math.toRadians(((18.697374558 + 24.06570982441908 * d) % 24) * 15 + lon) - ra
     val phi = Math.toRadians(lat)
     return Math.toDegrees(asin(sin(phi) * sin(dec) + cos(phi) * cos(dec) * cos(ha)))
+}
+
+/** Mirrors the web's nextHour wording; unknown phase data never becomes invented rain. */
+private fun sourceLiveHeadline(live: RainNowcast, now: Long, units: DisplayUnits): String? {
+    val event = live.activeRain(now) ?: return null
+    val start = event.startMillis ?: live.timeMillis
+    val at = ((start - live.timeMillis) / 60_000.0).roundToInt().coerceAtLeast(0)
+    val kind =
+        if (live.hasTypedRates) event.kind?.takeUnless { it == PrecipKind.UNKNOWN } ?: return null
+        else if (live.snow.getOrNull(at) == true) PrecipKind.SNOW else PrecipKind.RAIN
+    fun span(minutes: Int): String =
+        if (minutes < 60) "$minutes min"
+        else "${minutes / 60} h${if (minutes % 60 == 0) "" else " ${minutes % 60} min"}"
+    fun until(time: Long) = span(((time - now) / 60_000.0).roundToInt().coerceAtLeast(1))
+    val label = kind.label
+    val what =
+        when (event.peak) {
+            "heavy" -> "Heavy $label"
+            "light" -> "Light $label"
+            else -> label.replaceFirstChar { it.uppercase() }
+        }
+    val lead = live.dbz.size - 1
+    val whole =
+        when {
+            lead == 60 -> "hour"
+            lead % 60 != 0 -> span(lead)
+            else -> "${lead / 60} hours"
+        }
+    val sentence =
+        if (start > now)
+            "$what starting in ${until(start)}" +
+                (event.endMillis?.let {
+                    ", for about ${span(((it - start) / 60_000.0).roundToInt())}"
+                } ?: "")
+        else "$what " + (event.endMillis?.let { "ending in ${until(it)}" } ?: "for the next $whole")
+    val depth = if (kind.isSnow) (event.rateMmH ?: 0.0) * 10 / 25.4 else 0.0
+    return sentence + if (depth >= .1) ", up to ${units.precip(depth, snow = true)} an hour" else ""
 }

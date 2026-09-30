@@ -13,6 +13,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontSynthesis
 import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,6 +59,27 @@ fun webFontFamily(width: Float = 96f): FontFamily =
         )
     }
 
+/** CSS line boxes keep their leading, including a single line shorter than font metrics. */
+fun webTextStyle(
+    size: Float = 14f,
+    width: Float = 96f,
+    weight: Int = 400,
+    lineHeight: Float = size * 1.35f,
+    letterSpacing: Float = 0f,
+): TextStyle =
+    TextStyle(
+        fontFamily = webFont(width, weight),
+        fontWeight = FontWeight(weight),
+        fontSynthesis = FontSynthesis.None,
+        fontFeatureSettings = "tnum",
+        fontSize = size.sp,
+        lineHeight = lineHeight.sp,
+        lineHeightStyle =
+            LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None),
+        letterSpacing = letterSpacing.sp,
+        platformStyle = PlatformTextStyle(includeFontPadding = false),
+    )
+
 @Composable
 fun WebText(
     text: String,
@@ -77,16 +99,7 @@ fun WebText(
         color = color,
         maxLines = maxLines,
         overflow = overflow,
-        style =
-            TextStyle(
-                fontFamily = webFont(width, weight),
-                fontWeight = FontWeight(weight),
-                fontSynthesis = FontSynthesis.None,
-                fontSize = size.sp,
-                lineHeight = lineHeight.sp,
-                letterSpacing = letterSpacing.sp,
-                platformStyle = PlatformTextStyle(includeFontPadding = false),
-            ),
+        style = webTextStyle(size, width, weight, lineHeight, letterSpacing),
     )
 }
 

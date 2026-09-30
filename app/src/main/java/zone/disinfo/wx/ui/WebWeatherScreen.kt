@@ -76,6 +76,9 @@ fun WebWeatherScreen(
     }
     val ink = MaterialTheme.colorScheme.onSurface
     val dark = MaterialTheme.colorScheme.surface.luminance() < .3f
+    val showSavedStatus =
+        state.error != null ||
+            state.cached && forecast != null && now - forecast.fetchedAt > 15 * 60_000
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val heroMinimum = maxHeight
         LazyColumn(
@@ -115,10 +118,7 @@ fun WebWeatherScreen(
                         }
                     },
         ) {
-            if (
-                state.error != null ||
-                    state.cached && forecast != null && now - forecast.fetchedAt > 15 * 60_000
-            )
+            if (showSavedStatus)
                 item {
                     Row(
                         Modifier.fillMaxWidth()
@@ -228,7 +228,12 @@ fun WebWeatherScreen(
                                 Modifier.fillMaxWidth().padding(top = 14.dp),
                                 units,
                             )
-                        if (state.rainStatus != null && !state.loading && forecast != null)
+                        if (
+                            state.rainStatus != null &&
+                                !state.loading &&
+                                forecast != null &&
+                                !showSavedStatus
+                        )
                             WebText(
                                 "Live precipitation unavailable",
                                 11f,

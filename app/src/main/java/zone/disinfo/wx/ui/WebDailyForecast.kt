@@ -148,6 +148,7 @@ fun WebDailyForecast(
                                 val p =
                                     Paint(Paint.ANTI_ALIAS_FLAG).apply {
                                         typeface = face
+                                        fontFeatureSettings = "tnum"
                                         fontVariationSettings = "'wght' $weight, 'wdth' $width"
                                         textSize = size * d
                                         color = ink.toArgb()
@@ -298,6 +299,7 @@ private fun HourlyDayRibbon(rows: List<WeatherHour>, units: DisplayUnits, zone: 
             val p =
                 Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     typeface = face
+                    fontFeatureSettings = "tnum"
                     fontVariationSettings = "'wght' $weight, 'wdth' $width"
                     textSize = sizeSp * d
                     this.color = color.toArgb()

@@ -23,13 +23,10 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.PlatformTextStyle
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.core.content.res.ResourcesCompat
 import kotlin.math.*
 import zone.disinfo.wx.R
@@ -244,13 +241,7 @@ fun WebConditionCells(
                             measure
                                 .measure(
                                     AnnotatedString(value),
-                                    TextStyle(
-                                        fontFamily = webFont(96f, 400),
-                                        fontSize = 13.sp,
-                                        lineHeight = 17.55.sp,
-                                        platformStyle =
-                                            PlatformTextStyle(includeFontPadding = false),
-                                    ),
+                                    webTextStyle(size = 13f, lineHeight = 17.55f),
                                     constraints =
                                         Constraints(
                                             maxWidth =
@@ -416,7 +407,12 @@ private fun CellMini(
                         drawRect(if (expanded) ink else rainColor, p, z)
                 }
             "cover" -> {
-                rect(1.0, 10.0, 136.0, 10.0, ink.copy(alpha = .12f))
+                drawRect(
+                    ink,
+                    Offset(scale, 10 * scale),
+                    Size(136 * scale, 10 * scale),
+                    style = Stroke(1.2f * scale),
+                )
                 rect(1.0, 10.0, 136 * (v[0] ?: 0.0).coerceIn(0.0, 100.0) / 100, 10.0, ink)
             }
             "wind" ->
@@ -473,6 +469,7 @@ private fun CellMini(
                     val text =
                         android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
                             typeface = face
+                            fontFeatureSettings = "tnum"
                             fontVariationSettings = "'wght' 700, 'wdth' 96"
                             textSize = 11 * scale
                             color = ink.toArgb()

@@ -355,7 +355,7 @@ fun PlumeScreen(
                 Spacer(Modifier.width(24.dp))
             }
         }
-        LazyColumn(Modifier.fillMaxSize()) {
+        LazyColumn(Modifier.fillMaxSize().testTag("plumes_scroll")) {
             item {
                 Column(
                     Modifier.fillMaxWidth().padding(top = 8.dp).background(wash).padding(16.dp),
@@ -871,6 +871,7 @@ private fun FullPlumeChart(
                             val paint =
                                 Paint(Paint.ANTI_ALIAS_FLAG).apply {
                                     typeface = font
+                                    fontFeatureSettings = "tnum"
                                     textAlign = Paint.Align.CENTER
                                     color = ink.toArgb()
                                     textSize = 40f

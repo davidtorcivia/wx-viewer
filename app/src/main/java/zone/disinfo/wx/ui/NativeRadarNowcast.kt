@@ -120,7 +120,7 @@ internal class NativeRadarNowcast {
             )
             if (!isRadarNowcastFresh(frame.scanTime, Instant.now().epochSecond))
                 throw IOException("Latest observed scan is too old for a motion forecast")
-            val key = "$base/${frame.scanTime}/${frame.revision}/${crop.query}/$nexrad"
+            val key = "$base/rg/${frame.scanTime}/${frame.revision}/${crop.query}/$nexrad"
             val imageKey = "$key/$leadMinutes"
             synchronized(images) { images[imageKey] }
                 ?.let {
@@ -133,7 +133,7 @@ internal class NativeRadarNowcast {
                         coroutineScope {
                             val raw = async {
                                 loadRadarPixels(
-                                    "$base/api/radar/mrms/${frame.scanTime}/crop.png?${crop.query}"
+                                    "$base/api/radar/mrms/${frame.scanTime}/crop.png?${crop.query}&v=rg"
                                 )
                             }
                             val motion = async {
@@ -198,7 +198,7 @@ internal class NativeRadarNowcast {
                     } ?: throw IOException("Radar motion forecast took too long to load")
                 currentCoroutineContext().ensureActive()
                 if (
-                    source.raw.channels != 1 ||
+                    source.raw.channels !in setOf(1, 3, 4) ||
                         source.motion.channels < 3 ||
                         source.palette.width != 256 ||
                         source.palette.height < 2 ||
@@ -316,7 +316,16 @@ private fun RadarPixels.echo(lon: Double, lat: Double, out: RadarEcho, local: Bo
     out.dbz = if (denominator > 0) numerator / denominator else -32.0
     out.covered = denominator
     out.coverage = coverage
+    // New MRMS crops carry q in R and PrecipFlag snow (0/255) in G.
+    // Old grayscale crops remain valid and have no classification channel.
     if (local) out.snow = value(floor(x + .5).toInt(), floor(y + .5).toInt(), 2) == 1
+    else if (channels >= 3) {
+        val nearestX = floor(x + .5).toInt()
+        val nearestY = floor(y + .5).toInt()
+        // The RG contract leaves B zero; copied RGB grayscale from an older server
+        // must not turn a strong reflectivity value in G into invented snow.
+        out.snow = value(nearestX, nearestY, 2) == 0 && value(nearestX, nearestY, 1) > 127
+    }
 }
 
 /** Also exercised on Android through fixture PNG decode -> projection -> bitmap integration. */
@@ -366,7 +375,7 @@ internal suspend fun renderRadarAdvection(
                         if (echo.covered >= .5) echo.dbz * (1 - nx.coverage) + nx.dbz * nx.coverage
                         else nx.dbz
                     echo.covered = 1.0
-                    echo.snow = nx.coverage >= .5 && nx.snow
+                    if (nx.coverage >= .5) echo.snow = nx.snow
                 }
             }
             if (echo.covered < .5) continue

@@ -24,10 +24,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.InputMode
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.dp
@@ -95,7 +97,8 @@ internal fun alpha(color: Color, value: Float) = color.copy(alpha = value).toArg
 
 internal fun chartZone(zone: String) = runCatching {
     ZoneId.of(zone)
-}.getOrDefault(ZoneId.of("UTC"))
+}
+    .getOrDefault(ZoneId.of("UTC"))
 
 internal fun chartDay(time: Long, zone: String) =
     Instant.ofEpochMilli(time).atZone(chartZone(zone)).toLocalDate()
@@ -245,35 +248,40 @@ internal fun Modifier.webScrub(
         }
     }
 
+@Composable
 private fun Modifier.chartKeys(
     rows: List<WeatherHour>,
     selected: Long?,
     now: Long,
     onSelect: (Long?) -> Unit,
-): Modifier = onKeyEvent { event ->
-    if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
-    when (event.key) {
-        Key.Escape -> {
-            onSelect(null)
-            true
+): Modifier {
+    val keyboardInput = LocalInputModeManager.current.inputMode == InputMode.Keyboard
+    return onKeyEvent { event ->
+            if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+            when (event.key) {
+                Key.Escape -> {
+                    onSelect(null)
+                    true
+                }
+                Key.DirectionLeft,
+                Key.DirectionDown,
+                Key.DirectionRight,
+                Key.DirectionUp -> {
+                    val sign =
+                        if (event.key == Key.DirectionLeft || event.key == Key.DirectionDown) -1
+                        else 1
+                    val value = (selected ?: (now / CHART_HOUR) * CHART_HOUR) + sign * CHART_HOUR
+                    onSelect(
+                        if (value < (rows.firstOrNull()?.timeMillis ?: now)) null
+                        else min(value, rows.lastOrNull()?.timeMillis ?: now)
+                    )
+                    true
+                }
+                else -> false
+            }
         }
-        Key.DirectionLeft,
-        Key.DirectionDown,
-        Key.DirectionRight,
-        Key.DirectionUp -> {
-            val sign =
-                if (event.key == Key.DirectionLeft || event.key == Key.DirectionDown) -1 else 1
-            val value = (selected ?: (now / CHART_HOUR) * CHART_HOUR) + sign * CHART_HOUR
-            onSelect(
-                if (value < (rows.firstOrNull()?.timeMillis ?: now)) null
-                else min(value, rows.lastOrNull()?.timeMillis ?: now)
-            )
-            true
-        }
-        else -> false
-    }
+        .focusable(enabled = keyboardInput)
 }
-    .focusable()
 
 internal data class XY(val x: Float, val y: Float)
 
@@ -676,14 +684,23 @@ fun WebHourlyChart(
                     )
                 }
             }
-            if (nowMillis in first..last)
-                canvas.drawLine(
-                    x(nowMillis),
-                    22f,
-                    x(nowMillis),
-                    total - 26,
-                    stroke(ink.toArgb(), 1.5f, floatArrayOf(3f, 4f)),
-                )
+            if (nowMillis in first..last) {
+                // Some API27 hardware Canvas paths lose DashPathEffect on drawLine.
+                // Explicit source-sized segments keep the 3px dash / 4px gap exact.
+                val nowX = x(nowMillis)
+                val nowPaint = stroke(ink.toArgb(), 1.5f)
+                var dashStart = 22f
+                while (dashStart < total - 26) {
+                    canvas.drawLine(
+                        nowX,
+                        dashStart,
+                        nowX,
+                        min(dashStart + 3f, total - 26),
+                        nowPaint,
+                    )
+                    dashStart += 7f
+                }
+            }
             selectedTime?.let { at ->
                 val r =
                     rows.firstOrNull { at >= it.timeMillis && at < it.timeMillis + CHART_HOUR }
