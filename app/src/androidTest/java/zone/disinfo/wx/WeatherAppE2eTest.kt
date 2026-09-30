@@ -15,6 +15,7 @@ import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -22,6 +23,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
 import androidx.compose.ui.text.AnnotatedString
@@ -73,6 +75,7 @@ class WeatherAppE2eTest {
 
     @Before
     fun launchWithOfflineForecast() {
+        instrumentation.setInTouchMode(true)
         // A fixture position is used; permission prevents the real onResume reconciliation
         // from removing it. As with GrantPermissionRule, keep this grant until the emulator
         // run ends: revoking permission here would kill the active instrumentation process.
@@ -149,6 +152,9 @@ class WeatherAppE2eTest {
         compose.waitForIdle()
         compose.onNodeWithTag("weather_overview").assertIsDisplayed()
         compose.onNodeWithTag("hero_temperature").assertTextContains("68", substring = true)
+        // A fresh touch-mode launch must not focus/scroll to a below-fold chart.
+        screenshot("weather-launch-before-interaction")
+        compose.onNodeWithTag("hero_temperature").assertIsDisplayed()
     }
 
     @After
@@ -303,6 +309,43 @@ class WeatherAppE2eTest {
         compose.onNodeWithText("LIVE RADAR", substring = true).assertDoesNotExist()
         compose.onNodeWithText("No precipitation in the available samples").assertDoesNotExist()
         screenshot("weather-dry-no-imminent-panel")
+    }
+
+    @Test
+    fun weatherSectionsRenderAndDetailsExpandInPlace() {
+        val page = compose.onNodeWithTag("weather_overview")
+        page.performScrollToNode(hasTestTag("web_temperature_spiral"))
+        compose.onNodeWithTag("web_temperature_spiral").assertIsDisplayed()
+        screenshot("weather-spiral")
+        page.performScrollToNode(hasTestTag("condition_feels"))
+        compose.onNodeWithTag("condition_feels").performScrollTo().performClick()
+        compose
+            .onNodeWithTag("condition_feels")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded"))
+        compose.onNodeWithTag("web_condition_detail_feels").performScrollTo().assertIsDisplayed()
+        screenshot("weather-feels-detail")
+        compose.onNodeWithTag("condition_feels").performScrollTo().performClick()
+        compose
+            .onNodeWithTag("condition_feels")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
+        screenshot("weather-condition-cells")
+        page.performScrollToNode(hasTestTag("web_hourly_chart"))
+        compose.onNodeWithTag("web_hourly_chart").assertIsDisplayed()
+        screenshot("weather-48-hour-chart")
+        page.performScrollToNode(hasTestTag("daily_forecast"))
+        compose.onNodeWithTag("daily_forecast").assertIsDisplayed()
+        screenshot("weather-daily-rows")
+        val day = "2026-10-01" // The fixed NYC fixture's complete hourly day.
+        compose.onNodeWithTag("day_$day").performScrollTo().performClick()
+        compose
+            .onNodeWithTag("day_$day")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Expanded"))
+        compose.onNodeWithTag("day_detail_$day").performScrollTo().assertIsDisplayed()
+        screenshot("weather-expanded-daily-ribbon")
+        compose.onNodeWithTag("day_$day").performScrollTo().performClick()
+        compose
+            .onNodeWithTag("day_$day")
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed"))
     }
 
     /**

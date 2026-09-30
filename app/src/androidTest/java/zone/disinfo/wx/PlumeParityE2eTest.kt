@@ -2,6 +2,8 @@ package zone.disinfo.wx
 
 import android.content.Context
 import android.graphics.Bitmap
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
@@ -151,12 +153,28 @@ class PlumeParityE2eTest {
             }
         }
         scenario = ActivityScenario.launch(MainActivity::class.java)
-        compose.waitForIdle()
+        compose.waitUntil(20_000) {
+            compose.onAllNodesWithTag("hero_temperature").fetchSemanticsNodes().any { node ->
+                node.config.getOrNull(SemanticsProperties.Text)?.any { it.text.contains("68") } ==
+                    true
+            }
+        }
+        compose.onNodeWithTag("hero_temperature").assertTextContains("68", substring = true)
     }
 
     @After
     fun restore() {
-        if (::scenario.isInitialized) scenario.close()
+        if (::scenario.isInitialized) {
+            // Capture the actual final tree/screen before Activity teardown, even on assertion
+            // failure.
+            runCatching {
+                val dir = File(context.filesDir, "e2e").apply { mkdirs() }
+                File(dir, "plumes-final-${name.methodName}.txt")
+                    .writeText(compose.onRoot(useUnmergedTree = true).printToString())
+                screenshot("plumes-final-${name.methodName}-synthetic")
+            }
+            scenario.close()
+        }
         SettingsStore(context).save(original)
         context
             .getSharedPreferences("ensemble_view", Context.MODE_PRIVATE)
@@ -200,8 +218,16 @@ class PlumeParityE2eTest {
         screenshot("plumes-full-temperature-scrub-synthetic")
         compose.onNodeWithTag("core_3hrly-TMP_Mean").performScrollTo().performClick()
         compose.onNodeWithTag("core_3hrly-TMP_Mean").performClick()
-        compose.onNodeWithTag("three_hour_PRECIPITATION").performScrollTo().performClick()
-        compose.onNodeWithTag("plume_chart_3hrly-QPF").performScrollTo().assertIsDisplayed()
+        compose
+            .onNodeWithTag("plumes_scroll")
+            .performScrollToNode(hasTestTag("three_hour_PRECIPITATION"))
+        compose.onNodeWithTag("three_hour_PRECIPITATION").performClick().assertIsSelected()
+        screenshot("plumes-three-hour-toggle-synthetic")
+        compose
+            .onNodeWithTag("plumes_scroll")
+            .performScrollToNode(hasTestTag("plume_chart_3hrly-QPF"))
+        compose.onNodeWithTag("plume_chart_3hrly-QPF").assertIsDisplayed()
+        compose.onNodeWithText("3-Hour Precipitation").assertExists()
         screenshot("plumes-full-three-hour-synthetic")
         compose.onNodeWithTag("plume_help").performClick()
         compose.onNodeWithText("Understanding Ensemble Plumes").assertIsDisplayed()
@@ -212,19 +238,23 @@ class PlumeParityE2eTest {
 
     @Test
     fun compactPlumesAndFullNavigationSynthetic() {
-        compose.onNodeWithTag("compact_plumes").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("weather_overview").performScrollToNode(hasTestTag("compact_plumes"))
+        compose.onNodeWithTag("compact_plumes").assertIsDisplayed()
         compose.waitUntil(20_000) {
             compose.onAllNodesWithTag("plume_chart_3hrly-TMP").fetchSemanticsNodes().isNotEmpty()
         }
         screenshot("plumes-compact-temperature-synthetic")
         compose
-            .onNodeWithText("Precipitation", useUnmergedTree = true)
-            .performScrollTo()
-            .performClick()
+            .onNodeWithTag("weather_overview")
+            .performScrollToNode(hasTestTag("compact_tab_PRECIPITATION"))
+        compose.onNodeWithTag("compact_tab_PRECIPITATION").performClick().assertIsSelected()
         compose.waitUntil(20_000) {
             compose.onAllNodesWithTag("plume_chart_Total-QPF").fetchSemanticsNodes().isNotEmpty()
         }
-        compose.onNodeWithTag("plume_chart_Total-QPF").performScrollTo().performTouchInput {
+        compose
+            .onNodeWithTag("weather_overview")
+            .performScrollToNode(hasTestTag("plume_chart_Total-QPF"))
+        compose.onNodeWithTag("plume_chart_Total-QPF").assertIsDisplayed().performTouchInput {
             click(center)
         }
         screenshot("plumes-compact-rain-synthetic")
@@ -236,11 +266,16 @@ class PlumeParityE2eTest {
 
     @Test
     fun compactSnowAutomaticallySelectedSynthetic() {
-        compose.onNodeWithTag("compact_plumes").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("weather_overview").performScrollToNode(hasTestTag("compact_plumes"))
+        compose.onNodeWithTag("compact_plumes").assertIsDisplayed()
         compose.waitUntil(20_000) {
             compose.onAllNodesWithTag("plume_chart_Total-SNO").fetchSemanticsNodes().isNotEmpty()
         }
-        compose.onNodeWithTag("plume_chart_Total-SNO").performScrollTo().assertIsDisplayed()
+        compose
+            .onNodeWithTag("weather_overview")
+            .performScrollToNode(hasTestTag("plume_chart_Total-SNO"))
+        compose.onNodeWithTag("plume_chart_Total-SNO").assertIsDisplayed()
+        compose.onNodeWithTag("compact_tab_SNOW").assertIsSelected()
         screenshot("plumes-compact-snow-synthetic")
     }
 
