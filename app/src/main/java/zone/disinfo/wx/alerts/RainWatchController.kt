@@ -36,7 +36,17 @@ object RainWatchController {
 
     private val sessionLock = Any()
     private var session: Session? = null
-    @Volatile internal var serviceAlive = false
+    @Volatile
+    internal var serviceAlive = false
+        private set
+
+    internal data class ServiceLaunch(val id: String, val expiresAtElapsed: Long)
+
+    private var launch: ServiceLaunch? = null
+    private var foregroundReadyId: String? = null
+
+    internal val serviceBusy: Boolean
+        get() = synchronized(sessionLock) { launch != null || serviceAlive }
 
     /** Returns an actionable blocker, or null after Android accepts the visible user's request. */
     fun start(activity: ComponentActivity): String? {
@@ -45,7 +55,8 @@ object RainWatchController {
         }
         synchronized(sessionLock) {
             if (state.value.active) return null
-            if (serviceAlive) return "Rain watch is still stopping; try again in a moment"
+            if (launch != null || serviceAlive)
+                return "Rain watch is still stopping; try again in a moment"
         }
         AlertScheduler.createChannels(activity)
         val settings = SettingsStore(activity).load()
@@ -55,8 +66,12 @@ object RainWatchController {
         val token = UUID.randomUUID().toString()
         synchronized(sessionLock) {
             if (state.value.active) return null
-            if (serviceAlive) return "Rain watch is still stopping; try again in a moment"
-            session = Session(token, settings, SystemClock.elapsedRealtime())
+            if (launch != null || serviceAlive)
+                return "Rain watch is still stopping; try again in a moment"
+            val startedAt = SystemClock.elapsedRealtime()
+            session = Session(token, settings, startedAt)
+            launch = ServiceLaunch(token, startedAt + MAX_DURATION_MILLIS)
+            foregroundReadyId = null
             mutableState.value =
                 RainWatchState(
                     true,
@@ -73,7 +88,13 @@ object RainWatchController {
             )
             null
         } catch (_: Exception) {
-            finished("Android could not start rain watch. Keep the app open and try again.", token)
+            synchronized(sessionLock) {
+                if (launch?.id == token) launch = null
+                finished(
+                    "Android could not start rain watch. Keep the app open and try again.",
+                    token,
+                )
+            }
             state.value.summary
         }
     }
@@ -81,8 +102,10 @@ object RainWatchController {
     fun stop(context: Context) =
         synchronized(sessionLock) {
             clearLocked("Rain watch stopped")
-            // Keep revocation and the system stop atomic with respect to a new session.
-            context.applicationContext.stopService(Intent(context, RainWatchService::class.java))
+            // An admitted startForegroundService must promote before it is torn down.
+            // If onCreate has not acknowledged promotion yet, revoke only the logical
+            // session; onStartCommand will see the revoked token and shut down safely.
+            stopPromotedServiceLocked(context)
             Unit
         }
 
@@ -95,7 +118,7 @@ object RainWatchController {
         synchronized(sessionLock) {
             if (session?.id != expected) return
             clearLocked(reason)
-            context.applicationContext.stopService(Intent(context, RainWatchService::class.java))
+            stopPromotedServiceLocked(context)
         }
     }
 
@@ -113,26 +136,32 @@ object RainWatchController {
             true
         }
 
-    internal fun hasPendingStart(): Boolean =
+    /** The lifecycle gate outlives a cancelled logical session until actual onDestroy. */
+    internal fun serviceCreated(): ServiceLaunch? =
         synchronized(sessionLock) {
-            session?.let {
-                it.pending &&
-                    state.value.active &&
-                    SystemClock.elapsedRealtime() - it.startedAt in 0..30_000L
-            } == true
+            serviceAlive = true
+            launch
         }
 
-    internal fun expirePendingStart() =
+    internal fun foregroundReady(id: String) =
         synchronized(sessionLock) {
-            val current = session
-            if (
-                current != null &&
-                    current.pending &&
-                    SystemClock.elapsedRealtime() - current.startedAt > 30_000L
-            ) {
-                clearLocked("Rain watch could not start in time; open the app to try again")
+            if (launch?.id == id) foregroundReadyId = id
+        }
+
+    internal fun serviceDestroyed(id: String?) =
+        synchronized(sessionLock) {
+            serviceAlive = false
+            if (launch?.id == id) {
+                launch = null
+                foregroundReadyId = null
             }
         }
+
+    private fun stopPromotedServiceLocked(context: Context) {
+        if (launch == null || foregroundReadyId == launch?.id) {
+            context.applicationContext.stopService(Intent(context, RainWatchService::class.java))
+        }
+    }
 
     internal fun isSessionActive(id: String?): Boolean =
         synchronized(sessionLock) {

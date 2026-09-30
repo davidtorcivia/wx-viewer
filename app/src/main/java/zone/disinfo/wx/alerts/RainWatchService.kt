@@ -30,6 +30,8 @@ class RainWatchService : Service() {
     private var watchJob: Job? = null
     private var deadline = 0L
     private var sessionId: String? = null
+    private var launchId: String? = null
+    private var foregroundStarted = false
     private lateinit var preferences: SharedPreferences
     private val settingsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
         val owner = sessionId
@@ -41,7 +43,30 @@ class RainWatchService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        RainWatchController.serviceAlive = true
+        val admitted = RainWatchController.serviceCreated()
+        launchId = admitted?.id
+        if (admitted != null) {
+            deadline = admitted.expiresAtElapsed
+            // Fulfil Android's foreground-start contract before token checks, Binder
+            // permission lookups or any asynchronous work, including a pending Stop.
+            try {
+                ServiceCompat.startForeground(
+                    this,
+                    NOTIFICATION_ID,
+                    notification("Starting rain watch…"),
+                    if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                    else 0,
+                )
+                foregroundStarted = true
+                RainWatchController.foregroundReady(admitted.id)
+            } catch (_: Exception) {
+                RainWatchController.finished(
+                    "Android could not start rain watch; check notification settings",
+                    admitted.id,
+                )
+                stopSelf()
+            }
+        }
         preferences = getSharedPreferences("wx_settings_v1", MODE_PRIVATE)
         preferences.registerOnSharedPreferenceChangeListener(settingsListener)
     }
@@ -56,11 +81,11 @@ class RainWatchService : Service() {
         }
         if (watchJob != null) return START_NOT_STICKY
         val token = intent?.getStringExtra("session_token")
-        if (intent?.action != ACTION_START || !RainWatchController.consumeStartToken(token)) {
-            // A delayed command from a stopped session must not clear a newer token.
-            // The newer explicit Activity start is already queued on this main looper.
-            if (RainWatchController.hasPendingStart()) return START_NOT_STICKY
-            RainWatchController.expirePendingStart()
+        if (
+            !foregroundStarted ||
+                intent?.action != ACTION_START ||
+                !RainWatchController.consumeStartToken(token)
+        ) {
             sessionId = token
             finish("Open the app to start a new rain watch")
             return START_NOT_STICKY
@@ -76,18 +101,6 @@ class RainWatchService : Service() {
                     finish("Rain watch stopped")
                     return START_NOT_STICKY
                 }
-        try {
-            ServiceCompat.startForeground(
-                this,
-                NOTIFICATION_ID,
-                notification("Checking live precipitation…"),
-                if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-                else 0,
-            )
-        } catch (_: Exception) {
-            finish("Android could not start rain watch; check notification settings")
-            return START_NOT_STICKY
-        }
         // Independent guard cancels an in-flight request promptly on opt-out, expiry,
         // quiet hours, or notification permission/channel loss. No network is needed.
         scope.launch {
@@ -198,7 +211,7 @@ class RainWatchService : Service() {
     }
 
     private fun finish(reason: String) {
-        RainWatchController.finished(reason, sessionId)
+        RainWatchController.finished(reason, sessionId ?: launchId)
         scope.cancel()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -207,8 +220,8 @@ class RainWatchService : Service() {
     override fun onDestroy() {
         preferences.unregisterOnSharedPreferenceChangeListener(settingsListener)
         scope.cancel()
-        RainWatchController.finished("Rain watch stopped", sessionId)
-        RainWatchController.serviceAlive = false
+        RainWatchController.finished("Rain watch stopped", sessionId ?: launchId)
+        RainWatchController.serviceDestroyed(launchId)
         super.onDestroy()
     }
 
