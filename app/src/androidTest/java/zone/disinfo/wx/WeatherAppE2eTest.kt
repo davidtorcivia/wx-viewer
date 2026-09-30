@@ -408,24 +408,23 @@ class WeatherAppE2eTest {
             )
             compose.waitForIdle()
             assertEquals("Finger-up must preserve the last selected time", pinned, selection(tag))
-            val before =
-                page
-                    .fetchSemanticsNode()
-                    .config[SemanticsProperties.VerticalScrollAxisRange]
-                    .value()
+            // Lazy-list accessibility offsets are deliberately non-monotonic for differently
+            // sized items. Measure the actual chart position, not that pseudo-offset.
+            val before = chart.fetchSemanticsNode().positionInRoot.y
             chart.performTouchInput {
                 val x = width * .5f
                 down(Offset(x, height * .75f))
-                moveTo(Offset(x, height * .55f), delayMillis = 24)
-                moveTo(Offset(x, height * .25f), delayMillis = 24)
+                moveTo(Offset(x, height * .65f), delayMillis = 24)
+                moveTo(Offset(x, height * .5f), delayMillis = 64)
+                // Settle before release so a long fling cannot dispose the measured chart.
+                moveTo(Offset(x, height * .5f), delayMillis = 200)
                 up()
             }
-            val after =
-                page
-                    .fetchSemanticsNode()
-                    .config[SemanticsProperties.VerticalScrollAxisRange]
-                    .value()
-            assertTrue("Vertical motion on $tag must scroll the page", after > before)
+            val after = chart.fetchSemanticsNode().positionInRoot.y
+            assertTrue(
+                "Vertical motion on $tag must move its root position up: $before → $after",
+                after < before - 10f,
+            )
             page.performScrollToNode(hasTestTag(tag))
             compose.onNodeWithTag(tag).performScrollTo()
             assertEquals(
