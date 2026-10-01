@@ -100,9 +100,9 @@ internal fun RadarTransport(
                 }
             }
             if (largeType) {
-                Column {
-                    Text(stamp, fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
-                        modifier = Modifier.testTag("radar_frame_stamp"))
+                Column(Modifier.fillMaxWidth()) {
+                    Text(stamp, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 2,
+                        modifier = Modifier.fillMaxWidth().testTag("radar_frame_stamp"))
                     status()
                 }
             } else Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,

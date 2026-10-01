@@ -39,6 +39,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -339,6 +340,13 @@ private fun RadarView(
     var resumed by remember {
         mutableStateOf(lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
     }
+    var wallTime by remember(session) { mutableLongStateOf(Instant.now().epochSecond) }
+    LaunchedEffect(resumed, session) {
+        if (resumed) while (isActive) {
+            wallTime = Instant.now().epochSecond
+            delay(30_000)
+        }
+    }
     var linkPending by
         remember(initialLayer, initialTimeSeconds) { mutableStateOf(initialTimeSeconds) }
     DisposableEffect(lifecycle, session) {
@@ -540,6 +548,9 @@ private fun RadarView(
             }
         }
     val frame = frames.getOrNull(index)
+    val latestScan = frames.filter { it.field == null && !it.satellite && it.leadMinutes == 0 }.maxOfOrNull { it.time }
+    val delayedRadar = latestScan?.takeIf { wallTime - it > 600 }
+        ?.let { "Radar delayed · last scan ${radarClock(it, timeZone, wallTime - it > 86_400)}" }
     val ink = MaterialTheme.colorScheme.onSurface
     val paper = MaterialTheme.colorScheme.surface
     val density = LocalDensity.current
@@ -665,6 +676,7 @@ private fun RadarView(
                             "Saved ${radarClock(saved.savedAt / 1000, timeZone, true)} · Last viewed area"
                         savedAt != null ->
                             "Saved ${radarClock(savedAt / 1000, timeZone, true)} · Cached map areas only"
+                        delayedRadar != null -> delayedRadar
                         viewportWidth > 480.dp ->
                             frame?.let {
                                 if (it.field != null)
@@ -852,7 +864,10 @@ private fun RadarLegend(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                     Text(radarOverlays[session.overlay].orEmpty(), fontSize = if (compact) 12.sp else 13.sp, lineHeight = 18.sp,
-                        fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = if (LocalDensity.current.fontScale > 1.25f) 2 else 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false))
                     Icon(Icons.Rounded.KeyboardArrowDown, null, Modifier.size(16.dp), tint = muted)
                 }
                 DropdownMenu(menu, { menu = false }, containerColor = paper.copy(alpha = .97f),
