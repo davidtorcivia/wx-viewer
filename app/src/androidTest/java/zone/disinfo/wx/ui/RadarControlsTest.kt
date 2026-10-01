@@ -173,10 +173,11 @@ class RadarControlsTest {
         compose.onNodeWithTag("radar_scrubber").performSemanticsAction(SemanticsActions.SetProgress) { it(.72f) }
         compose.runOnIdle { assertEquals(.72f, fraction, .001f); assertFalse(playing) }
         compose.onNodeWithContentDescription("Play animation").assertIsDisplayed()
-        compose.onNodeWithTag("radar_scrubber").performTouchInput { click(Offset(width - 1f, center.y)) }
+        compose.onNodeWithTag("radar_slider_track", useUnmergedTree = true)
+            .performTouchInput { click(Offset(width + 1f, center.y)) }
         compose.runOnIdle { assertEquals(1f, fraction, .001f) }
         compose.onNodeWithContentDescription("Play animation").performClick()
-        compose.onNodeWithTag("radar_scrubber").performTouchInput {
+        compose.onNodeWithTag("radar_slider_track", useUnmergedTree = true).performTouchInput {
             swipe(Offset(width * .2f, center.y), Offset(width * .8f, center.y))
         }
         compose.runOnIdle { assertEquals(.8f, fraction, .03f); assertFalse(playing) }
@@ -187,7 +188,8 @@ class RadarControlsTest {
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "No animation available"))
         compose.onNodeWithTag("radar_scrubber").assertIsNotEnabled()
         val beforeDisabled = fraction
-        compose.onNodeWithTag("radar_scrubber").performTouchInput { click(Offset(1f, center.y)) }
+        compose.onNodeWithTag("radar_slider_track", useUnmergedTree = true)
+            .performTouchInput { click(Offset(width * .25f, center.y)) }
         compose.runOnIdle { assertEquals(beforeDisabled, fraction, .001f) }
         compose.onNodeWithText("SAVED").assertIsDisplayed()
         saveControls("radar-controls-saved-fallback")
