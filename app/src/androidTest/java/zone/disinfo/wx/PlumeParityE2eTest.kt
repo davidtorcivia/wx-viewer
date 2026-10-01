@@ -246,30 +246,57 @@ class PlumeParityE2eTest {
 
     @Test
     fun compactPlumesAndFullNavigationSynthetic() {
-        compose.onNodeWithTag("weather_overview").performScrollToNode(hasTestTag("compact_plumes"))
+        swipeWeatherUntilVisible("compact_tab_TEMPERATURE")
         compose.onNodeWithTag("compact_plumes").assertIsDisplayed()
         compose.waitUntil(20_000) {
             compose.onAllNodesWithTag("plume_chart_3hrly-TMP").fetchSemanticsNodes().isNotEmpty()
         }
         screenshot("plumes-compact-temperature-synthetic")
-        compose
-            .onNodeWithTag("weather_overview")
-            .performScrollToNode(hasTestTag("compact_tab_PRECIPITATION"))
+        swipeWeatherUntilVisible("compact_tab_PRECIPITATION")
         compose.onNodeWithTag("compact_tab_PRECIPITATION").performClick().assertIsSelected()
         compose.waitUntil(20_000) {
             compose.onAllNodesWithTag("plume_chart_Total-QPF").fetchSemanticsNodes().isNotEmpty()
         }
-        compose
-            .onNodeWithTag("weather_overview")
-            .performScrollToNode(hasTestTag("plume_chart_Total-QPF"))
+        swipeWeatherUntilVisible("plume_chart_Total-QPF")
         compose.onNodeWithTag("plume_chart_Total-QPF").assertIsDisplayed().performTouchInput {
             click(center)
         }
         screenshot("plumes-compact-rain-synthetic")
-        compose.onNodeWithTag("open_full_plumes").performScrollTo().performClick()
+        swipeWeatherUntilVisible("open_full_plumes")
+        compose.onNodeWithTag("open_full_plumes").performClick()
         compose.onNodeWithTag("full_plumes").assertIsDisplayed()
         compose.onNodeWithTag("tab_weather").performClick()
         compose.onNodeWithTag("weather_overview").assertIsDisplayed()
+    }
+
+    private fun swipeWeatherUntilVisible(tag: String) {
+        val maximumSwipes = 16
+        for (attempt in 0..maximumSwipes) {
+            compose.waitForIdle()
+            // Reacquire both nodes after each real gesture: lazy items and the saved-status row
+            // can change while cached data settles. Never traverse a stale descendant tree.
+            val viewport = compose.onNodeWithTag("weather_overview").fetchSemanticsNode().boundsInRoot
+            val targets = compose.onAllNodesWithTag(tag).fetchSemanticsNodes()
+            org.junit.Assert.assertTrue("Expected at most one $tag, found ${targets.size}", targets.size <= 1)
+            val target = targets.singleOrNull()?.boundsInRoot
+            if (target != null && target.width > 0f && target.height > 0f &&
+                target.left >= viewport.left - 1f && target.right <= viewport.right + 1f &&
+                target.top >= viewport.top - 1f && target.bottom <= viewport.bottom + 1f) {
+                compose.onNodeWithTag(tag).assertIsDisplayed()
+                return
+            }
+            if (attempt == maximumSwipes) break
+            val moveDown = target != null && target.top < viewport.top
+            compose.onNodeWithTag("weather_overview").performTouchInput {
+                // A vertical stroke may start over the embedded native radar, like a user's
+                // scroll. Successful reachability is required, including through that surface.
+                val upper = androidx.compose.ui.geometry.Offset(center.x, height * .2f)
+                val lower = androidx.compose.ui.geometry.Offset(center.x, height * .8f)
+                swipe(if (moveDown) upper else lower, if (moveDown) lower else upper, 350)
+            }
+        }
+        screenshot("plumes-unreachable-$tag")
+        org.junit.Assert.fail("$tag was not fully visible after $maximumSwipes real vertical swipes")
     }
 
     @Test
