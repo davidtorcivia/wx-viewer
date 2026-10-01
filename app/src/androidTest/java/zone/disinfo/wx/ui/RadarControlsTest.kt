@@ -39,7 +39,6 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
-import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -58,6 +57,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
+import kotlin.math.sign
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -177,8 +177,19 @@ class RadarControlsTest {
             .performTouchInput { click(Offset(width + 1f, center.y)) }
         compose.runOnIdle { assertEquals(1f, fraction, .001f) }
         compose.onNodeWithContentDescription("Play animation").performClick()
+        val dragTrack = compose.onNodeWithTag("radar_slider_track", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
+        val dragThumb = compose.onNodeWithTag("radar_slider_thumb", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
         compose.onNodeWithTag("radar_slider_track", useUnmergedTree = true).performTouchInput {
-            swipe(Offset(width * .2f, center.y), Offset(width * .8f, center.y))
+            val start = dragThumb.center - dragTrack.topLeft
+            val targetX = width * .8f
+            // Material3 consumes touch slop before moving the thumb. Start at the actual
+            // thumb and include that distance beyond the requested position in the gesture.
+            val end = Offset(targetX + sign(targetX - start.x) * viewConfiguration.touchSlop, start.y)
+            down(start)
+            for (step in 1..30) moveTo(start + (end - start) * (step / 30f))
+            up() // The final MOVE above reaches the endpoint before lifting the pointer.
         }
         compose.runOnIdle { assertEquals(.8f, fraction, .03f); assertFalse(playing) }
         compose.onNodeWithContentDescription("Animation speed").performClick()

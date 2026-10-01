@@ -221,14 +221,28 @@ class DailyForecastLayoutE2eTest {
         node("day_$day").performClick()
         compose.waitForIdle()
         node("day_detail_$day").assertIsDisplayed()
+        compose.mainClock.advanceTimeBy(400)
+        compose.waitForIdle()
         val opened = node("day_hint_$day").captureToImage().asAndroidBitmap()
+        saveImage("daily-hint-open-$name", opened)
         assertFalse("Disclosure still rotates after rebalancing", closed.sameAs(opened))
         node("day_$day").performClick()
         compose.waitForIdle()
-        assertTrue(
-            "Disclosure returns to its original frame",
-            closed.sameAs(node("day_hint_$day").captureToImage().asAndroidBitmap()),
-        )
+        // The 350ms rotation is evaluated by the Compose clock; give the graphics-layer
+        // update its final frame before comparing exact compositor pixels.
+        compose.mainClock.advanceTimeBy(400)
+        compose.waitForIdle()
+        var restored = node("day_hint_$day").captureToImage().asAndroidBitmap()
+        repeat(3) {
+            if (!closed.sameAs(restored)) {
+                compose.mainClock.advanceTimeByFrame()
+                compose.waitForIdle()
+                restored = node("day_hint_$day").captureToImage().asAndroidBitmap()
+            }
+        }
+        saveImage("daily-hint-closed-$name", closed)
+        saveImage("daily-hint-restored-$name", restored)
+        assertTrue("Disclosure returns to its original frame", closed.sameAs(restored))
     }
 
     private data class Geometry(val canvasWidthDp: Float, val barWidthDp: Float)
