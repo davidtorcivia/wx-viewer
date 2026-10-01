@@ -92,6 +92,17 @@ class RadarPlaybackPreviewTest {
         scrub(.10f)
         assertPaused("scrub-back")
         requirePixelChange(late, "temperature-scrub-pixels")
+        // Every attempt is the first physical tap while playing. Vary its phase within a
+        // 500ms tick to catch a pending playback write overwriting the newly selected time.
+        // The diagnostic alternate injectors never rescue any failed primary gesture.
+        val seekTargets = listOf(.80f, .15f, .65f, .30f)
+        val seekPhases = listOf(0L, 150L, 350L, 475L)
+        repeat(12) { attempt ->
+            play()
+            SystemClock.sleep(seekPhases[attempt % seekPhases.size])
+            scrub(seekTargets[attempt % seekTargets.size])
+            assertPaused("first-tap-during-play-$attempt")
+        }
         dragScrubber(.65f)
         assertPaused("drag-scrub-during-play")
         play()
