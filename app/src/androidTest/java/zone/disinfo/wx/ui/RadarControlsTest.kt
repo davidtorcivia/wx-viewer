@@ -194,6 +194,57 @@ class RadarControlsTest {
     }
 
     @Test
+    fun nativeRadarSeeksAfterEmptyLoadRefreshAndSessionReplacement() {
+        DisplayCache.initialize(instrumentation.targetContext)
+        val server = "https://seek-callback-${System.nanoTime()}.invalid"
+        val a = Place("seek-fixed-id", "Seek A", 40.7128, -74.006)
+        val b = a.copy(name = "Seek B", lat = 39.9526, lon = -75.1652)
+        var place by mutableStateOf(a)
+        // Access the exact retained production sessions, without a fixture branch in app code.
+        val owner = Class.forName("zone.disinfo.wx.ui.RadarSessions")
+        val instance = owner.getDeclaredField("INSTANCE").apply { isAccessible = true }.get(null)
+        val get = owner.getDeclaredMethod("get", android.content.Context::class.java,
+            String::class.java, Place::class.java).apply { isAccessible = true }
+        fun session(p: Place) = get.invoke(instance, instrumentation.targetContext, server, p) as RadarSession
+        val first = session(a).apply { playing = false }
+        val second = session(b).apply { playing = false }
+        compose.setContent { WxTheme(ThemeMode.LIGHT) { RadarScreen(server, place, timeZone = "UTC") } }
+        compose.onNodeWithTag("radar_scrubber").assertIsNotEnabled()
+        fun load(target: RadarSession, origin: Long) = compose.runOnIdle {
+            target.frames = RadarFrames((0..20).map { RadarFrame(origin + it * 60, "mrms") })
+            target.time = origin.toDouble()
+            target.playing = false
+        }
+        fun tap(target: RadarSession, origin: Long, fraction: Float) {
+            compose.onNodeWithTag("radar_scrubber").assertIsEnabled()
+            compose.onNodeWithTag("radar_slider_track", useUnmergedTree = true).performTouchInput {
+                click(Offset(width * fraction, center.y))
+            }
+            compose.runOnIdle {
+                assertEquals("A loaded/refreshed session must use its current frame list",
+                    origin + 1_200.0 * fraction, target.time, 4.0)
+                assertFalse(target.playing)
+            }
+        }
+        // No control recreation between empty and populated metadata, or between refreshes.
+        load(first, 1_700_000_000L)
+        tap(first, 1_700_000_000L, .70f)
+        load(first, 1_700_050_000L)
+        tap(first, 1_700_050_000L, .25f)
+        val held = first.time
+        compose.runOnIdle { place = b }
+        compose.onNodeWithTag("radar_scrubber").assertIsNotEnabled()
+        load(second, 1_700_100_000L)
+        tap(second, 1_700_100_000L, .80f)
+        compose.onNodeWithContentDescription("Time range").performTouchInput { click() }
+        compose.runOnIdle {
+            assertEquals("Range callback must target replacement session", "hourly", second.range)
+            assertEquals("Old session must remain unchanged", "now", first.range)
+            assertEquals(held, first.time, .001)
+        }
+    }
+
+    @Test
     fun samePlaceIdChangingCoordinatesReplacesAttachedNativeMapAndReturns() {
         DisplayCache.initialize(instrumentation.targetContext)
         // Fixed identity reproduces a moving "Here" location without requiring GPS permission.
