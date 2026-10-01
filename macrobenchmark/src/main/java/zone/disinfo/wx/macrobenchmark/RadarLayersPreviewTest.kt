@@ -55,10 +55,19 @@ class RadarLayersPreviewTest {
                     val ranges = if (layer in listOf("Precip total", "Snow total")) 2 else 3
                     repeat(ranges) { range ->
                         settle(layer, range)
+                        val playback = verifyFrameProgress(layer, range)
                         if (range == 0) {
-                            await(By.desc("Zoom in")).click()
+                            check(device.findObject(By.desc("Zoom in")) == null &&
+                                device.findObject(By.desc("Zoom out")) == null) {
+                                "The clean radar controls must not reintroduce zoom buttons"
+                            }
+                            // Native double-tap zoom, followed by a real camera pan.
+                            val map = await(By.descStartsWith("Interactive weather map"))
+                            val center = map.visibleBounds
+                            device.click(center.centerX(), center.centerY())
+                            device.click(center.centerX(), center.centerY())
                             SystemClock.sleep(750)
-                            await(By.desc("Zoom out")).click()
+                            device.findObject(By.desc("Close"))?.click()
                             // User map tap, popup dismissal, and camera movement.
                             device.click(device.displayWidth / 2, device.displayHeight / 2)
                             await(By.desc("Close")).click()
@@ -78,11 +87,12 @@ class RadarLayersPreviewTest {
                             check(shell("pidof $target") == foregroundPid) {
                                 "Background/resume restarted the $layer process"
                             }
-                            await(By.text("$layer ▾"))
+                            awaitSelected(layer)
                         }
                         screenshot("${slug(layer)}-$range")
                         results.put(JSONObject().put("layer", layer).put("rangeIndex", range)
                             .put("range", await(By.desc("Time range")).text)
+                            .put("playback", playback)
                             .put("result", "passed").put("pid", shell("pidof $target")))
                         instrumentation.sendStatus(0, Bundle().apply {
                             putString("wxRadarLayer", "$layer ${await(By.desc("Time range")).text}: passed")
@@ -106,7 +116,7 @@ class RadarLayersPreviewTest {
             settle("Temperature", 99)
             val before = shell("pidof $target")
             coldStart()
-            await(By.text("Temperature ▾"))
+            awaitSelected("Temperature")
             settle("Temperature", 100)
             check(shell("pidof $target") != before) { "Cold restart reused the same process" }
             results.put(JSONObject().put("rapidSwitches", layers.size * 2)
@@ -168,12 +178,12 @@ class RadarLayersPreviewTest {
     }
 
     private fun settle(layer: String, range: Int) {
-        await(By.text("$layer ▾"))
+        awaitSelected(layer)
         // Hold the initial observed/model frame before playback can race into a forecast.
         device.findObject(By.desc("Pause animation"))?.click()
         // A selected menu is not proof of a loaded layer. Require loading to finish and
         // a native map to survive long enough for grid decoding and asynchronous labels.
-        val end = SystemClock.elapsedRealtime() + 25_000
+        val end = SystemClock.elapsedRealtime() + 90_000
         do {
             assertAlive()
             val unavailable = device.findObjects(By.textContains("unavailable"))
@@ -191,31 +201,82 @@ class RadarLayersPreviewTest {
         }
     }
 
+    private fun verifyFrameProgress(layer: String, range: Int): JSONObject {
+        fun stamp() = await(By.res("radar_frame_stamp")).text
+        val initial = requireNotNull(stamp())
+        val play = await(By.desc("Play animation"))
+        if (!play.isEnabled) {
+            // RTMA Now can honestly have only one observed frame.
+            SystemClock.sleep(800)
+            check(stamp() == initial) { "$layer/$range advanced with playback disabled" }
+            return JSONObject().put("animated", false).put("heldStamp", initial)
+        }
+        play.click()
+        await(By.desc("Pause animation"))
+        val unique = linkedSetOf(initial)
+        val series = JSONArray().put(initial)
+        var previous = initial
+        var changedAt = SystemClock.elapsedRealtime()
+        val started = changedAt
+        do {
+            assertAlive()
+            val current = requireNotNull(stamp())
+            if (current != previous) {
+                previous = current
+                changedAt = SystemClock.elapsedRealtime()
+                unique += current
+                series.put(current)
+            }
+            if (unique.size >= 3) break
+            check(SystemClock.elapsedRealtime() - changedAt < if (unique.size == 1) 90_000 else 25_000) {
+                "$layer/$range froze during live playback: $series"
+            }
+            SystemClock.sleep(200)
+        } while (SystemClock.elapsedRealtime() - started < 120_000)
+        check(unique.size >= 3) { "$layer/$range never sustained frame advancement: $series" }
+        await(By.desc("Pause animation")).click()
+        await(By.desc("Play animation"))
+        return JSONObject().put("animated", true).put("uniqueStamps", unique.size).put("series", series)
+    }
+
     private fun select(label: String) {
         freshAccessibility()
         device.findObject(By.desc("Expand radar legend"))?.click()
-        await(By.textEndsWith(" ▾")).click()
-        // Wait for actual menu entries. A menu that fits the screen is not marked scrollable.
-        await(menuItems)
+        val chooser = await(By.desc("Choose radar layer"))
+        val selected = chooser.text ?: chooser.findObjects(By.text(Pattern.compile(".+")))
+            .joinToString(" ") { it.text }
+        chooser.click()
+        // Wait for an entry that cannot be the existing selected chip or the bottom tab.
+        // A menu that fits the screen is not marked scrollable.
+        await(By.text(layers.first { it != label && it != selected && it != "Radar" }))
         freshAccessibility()
         var choice = device.findObjects(By.text(label)).firstOrNull {
-            it.visibleBounds.height() > 0 && it.visibleBounds.centerY() < device.displayHeight * .85
+            it.visibleBounds.height() > 0 && it.contentDescription != "Choose radar layer" &&
+                it.visibleBounds.centerY() < device.displayHeight * .85
         }
         if (choice == null) {
             await(By.scrollable(true))
             val menu = UiScrollable(UiSelector().scrollable(true)).setAsVerticalList()
             check(menu.scrollIntoView(UiSelector().text(label))) { "Missing layer menu item $label" }
-            choice = await(By.text(label)) { it.visibleBounds.centerY() < device.displayHeight * .85 }
+            choice = await(By.text(label)) {
+                it.contentDescription != "Choose radar layer" && it.visibleBounds.centerY() < device.displayHeight * .85
+            }
         }
         choice.click()
         val closedBy = SystemClock.elapsedRealtime() + 5_000
         do {
             freshAccessibility()
-            if (device.findObjects(menuItems).isEmpty()) break
+            if (device.findObjects(menuItems).count { it.contentDescription != "Choose radar layer" } <= 1) break
             SystemClock.sleep(50)
         } while (SystemClock.elapsedRealtime() < closedBy)
-        check(device.findObjects(menuItems).isEmpty()) { "Layer menu did not close" }
-        await(By.text("$label ▾"))
+        check(device.findObjects(menuItems).count { it.contentDescription != "Choose radar layer" } <= 1) {
+            "Layer menu did not close"
+        }
+        awaitSelected(label)
+    }
+
+    private fun awaitSelected(label: String) = await(By.desc("Choose radar layer")) {
+        it.text == label || it.findObject(By.text(label)) != null
     }
 
     private fun coldStart() {
