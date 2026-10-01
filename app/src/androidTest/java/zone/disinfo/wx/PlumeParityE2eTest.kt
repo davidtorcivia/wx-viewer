@@ -271,6 +271,7 @@ class PlumeParityE2eTest {
 
     private fun swipeWeatherUntilVisible(tag: String) {
         val maximumSwipes = 16
+        val trace = org.json.JSONArray()
         for (attempt in 0..maximumSwipes) {
             compose.waitForIdle()
             // Reacquire both nodes after each real gesture: lazy items and the saved-status row
@@ -279,14 +280,20 @@ class PlumeParityE2eTest {
             val targets = compose.onAllNodesWithTag(tag).fetchSemanticsNodes()
             org.junit.Assert.assertTrue("Expected at most one $tag, found ${targets.size}", targets.size <= 1)
             val target = targets.singleOrNull()?.boundsInRoot
-            if (target != null && target.width > 0f && target.height > 0f &&
+            val placed = target != null && target.width > 0f && target.height > 0f
+            trace.put(JSONObject().put("attempt", attempt).put("viewport", viewport.toString())
+                .put("target", target?.toString() ?: JSONObject.NULL).put("placed", placed))
+            File(deviceArtifactDirectory(context), "plumes-scroll-$tag.json").writeText(trace.toString(2))
+            if (placed && target != null &&
                 target.left >= viewport.left - 1f && target.right <= viewport.right + 1f &&
                 target.top >= viewport.top - 1f && target.bottom <= viewport.bottom + 1f) {
                 compose.onNodeWithTag(tag).assertIsDisplayed()
                 return
             }
             if (attempt == maximumSwipes) break
-            val moveDown = target != null && target.top < viewport.top
+            // A prefetched, unplaced lazy item has zero bounds near the root's origin.
+            // It must not reverse the user's scrolling before entering the viewport.
+            val moveDown = placed && target != null && target.top < viewport.top
             compose.onNodeWithTag("weather_overview").performTouchInput {
                 // A vertical stroke may start over the embedded native radar, like a user's
                 // scroll. Successful reachability is required, including through that surface.

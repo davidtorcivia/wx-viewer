@@ -154,6 +154,11 @@ class ScreenBeautyE2eTest {
             }
         }
         captureHeroAndAssertHorizontalFit("$prefix-weather")
+        // At 200% text the introductory copy can push the temperature below the first
+        // viewport. Also capture it after scrolling so every glyph can be reviewed.
+        compose.onNodeWithTag("hero_temperature").performScrollTo()
+        captureHeroAndAssertHorizontalFit("$prefix-weather-hero-visible")
+        compose.onNodeWithTag("weather_overview").performScrollToIndex(0)
         minimumTarget("find_place")
         minimumTarget("settings")
         compose.onNodeWithTag("weather_overview").performScrollToNode(hasTestTag("hour_strip_0"))
@@ -244,8 +249,8 @@ class ScreenBeautyE2eTest {
             .put("screenshot", "$name.png")
             .put("manualPixelReviewRequired", true)
             .put("reviewRequirement", "Inspect complete hero glyph ink, including the degree sign, for clipping or overlap. " +
-                "The intentional negative-leading line box can report vertical font-metric overflow; " +
-                "these assertions validate horizontal layout only, not vertical pixel containment.")
+                "Paragraph allocation and text advance differ for the condensed variable font. " +
+                "These assertions validate line extents against the screen, not glyph ink or vertical pixel containment.")
             .put("screenBoundsPx", root.toString())
             .put("textBoundsPx", node.toString())
             .put("layouts", org.json.JSONArray(layouts.map { layout ->
@@ -277,7 +282,18 @@ class ScreenBeautyE2eTest {
         android.util.Log.i("WxBeautyHero", report.toString())
         compose.onNodeWithTag(tag).assertIsDisplayed()
         assertInsideScreen(tag)
-        assertTrue("$tag overflows horizontally; inspect $name.png and its text-layout.json", layouts.none { it.didOverflowWidth })
+        // MultiParagraph.width can retain the available constraint width while Text's
+        // measured size follows its shorter advance. didOverflowWidth then reports unused
+        // paragraph space, even when all glyphs fit. Check the actual lines against the
+        // viewport, retain the raw flag above, and require the captured ink to be reviewed.
+        for (layout in layouts) {
+            assertTrue("$tag must retain its complete single line", layout.lineCount == 1 &&
+                !layout.multiParagraph.didExceedMaxLines && !layout.isLineEllipsized(0))
+            assertTrue("$tag line spills past left screen edge; inspect $name.png",
+                node.left + layout.getLineLeft(0) >= root.left - 1f)
+            assertTrue("$tag line spills past right screen edge; inspect $name.png",
+                node.left + layout.getLineRight(0) <= root.right + 1f)
+        }
     }
 
     private fun screenshot(name: String) {
