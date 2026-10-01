@@ -30,7 +30,8 @@ import json, sys, xml.etree.ElementTree as ET
 root = ET.Element('map')
 ET.SubElement(root, 'string', name='settings').text = json.dumps({
     'version': 1, 'serverUrl': 'https://sref.disinfo.zone',
-    'places': [{'id':'layer-test-nyc','name':'NYC','lat':40.7128,'lon':-74.006}],
+    'places': [{'id':'layer-test-nyc','name':'NYC','lat':40.7128,'lon':-74.006},
+               {'id':'layer-test-phl','name':'Philadelphia','lat':39.9526,'lon':-75.1652}],
     'locationEnabled':False, 'backgroundLocationEnabled':False,
     'alerts': {'enabled':False}})
 ET.ElementTree(root).write(sys.argv[1], encoding='unicode', xml_declaration=True)
@@ -41,6 +42,24 @@ adb install -r app/build/outputs/apk/preview/app-preview.apk
 bash scripts/verify-preview-apk.sh app/build/outputs/apk/preview/app-preview.apk > "$output/apk-verification.txt"
 adb install -r -t macrobenchmark/build/outputs/apk/benchmark/macrobenchmark-benchmark.apk
 adb logcat -c
+suite_status=0
+# Run cold observed→forecast playback before the all-layer sweep can warm those assets.
+# Every proof targets the installed preview; the external test APK carries no app fixtures.
+for method in coldRadarForecastAdvancesBeyondFirstFrameAndReplays sustainedPlaybackPixelsAndInterruptedFlowsOnMinifiedPreview; do
+ remote=/sdcard/Android/media/zone.disinfo.wx.macrobenchmark/radar-playback-$method
+ mkdir -p "$output/playback-$method"
+ set +e
+ timeout 900 adb shell am instrument -w -r \
+  -e class "zone.disinfo.wx.macrobenchmark.RadarPlaybackPreviewTest#$method" \
+  -e wxRadarPlaybackPreview true -e additionalTestOutputDir "$remote" \
+  zone.disinfo.wx.macrobenchmark/androidx.test.runner.AndroidJUnitRunner 2>&1 | tee "$output/playback-$method/instrumentation.log"
+ status=${PIPESTATUS[0]}
+ set -e
+ adb pull "$remote/." "$output/playback-$method/" || true
+ if [[ $status -ne 0 ]] || ! grep -q 'OK (1 test)' "$output/playback-$method/instrumentation.log"; then
+  suite_status=1
+ fi
+done
 remote=/sdcard/Android/media/zone.disinfo.wx.macrobenchmark/radar-layers-preview
 set +e
 timeout 900 adb shell am instrument -w -r \
@@ -54,7 +73,7 @@ adb logcat -d > "$output/logcat.txt" || true
 if [[ $status -ne 0 ]] || ! grep -q 'OK (1 test)' "$output/instrumentation.log"; then
  cat "$output/instrumentation.log"
  grep -A 35 -B 2 -E 'FATAL EXCEPTION|Fatal signal' "$output/logcat.txt" || true
- exit 1
+ suite_status=1
 fi
 
 # Exercise every layer/range against saved data with real connectivity disabled, then
@@ -73,6 +92,7 @@ for state in saved empty; do
  adb logcat -d > "$output/offline-$state-logcat.txt" || true
  if [[ $status -ne 0 ]] || ! grep -q 'OK (1 test)' "$output/offline-$state.log"; then
   cat "$output/offline-$state.log"
-  exit 1
+  suite_status=1
  fi
 done
+exit "$suite_status"
