@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -37,6 +38,7 @@ import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -81,6 +83,7 @@ class RadarControlsTest {
         var fraction by mutableStateOf(.35f)
         var speedClicks = 0
         var rangeClicks = 0
+        var transportHeight by mutableStateOf(160.dp)
         var expectedInk = Color.Unspecified
         compose.setContent {
             val density = LocalDensity.current.density
@@ -91,12 +94,13 @@ class RadarControlsTest {
                     Box(Modifier.width(320.dp).height(480.dp).testTag("radar_controls_fixture")
                         .background(if (dark) Color(0xff303d42) else Color(0xffc9d2ca))) {
                         RadarDistanceScale("20 mi", 68f,
-                            Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 160.dp))
+                            Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = transportHeight + 24.dp))
                         RadarTransport(playing, available, false, "Wed 12:30 PM",
                             if (available) "FORECAST +60m" else "SAVED", false, "½×", "3½d",
                             { fraction }, { playing = !playing }, { speedClicks++ }, { rangeClicks++ },
                             { fraction = it; playing = false },
-                            Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(12.dp))
+                            Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(12.dp)
+                                .onSizeChanged { transportHeight = (it.height / density).dp })
                     }
                 }
             }
@@ -170,13 +174,20 @@ class RadarControlsTest {
         compose.onNodeWithContentDescription("Play animation").assertIsDisplayed()
         compose.onNodeWithTag("radar_scrubber").performTouchInput { click(Offset(width - 1f, center.y)) }
         compose.runOnIdle { assertEquals(1f, fraction, .001f) }
+        compose.onNodeWithContentDescription("Play animation").performClick()
+        compose.onNodeWithTag("radar_scrubber").performTouchInput {
+            swipe(Offset(width * .2f, center.y), Offset(width * .8f, center.y))
+        }
+        compose.runOnIdle { assertEquals(.8f, fraction, .03f); assertFalse(playing) }
         compose.onNodeWithContentDescription("Animation speed").performClick()
         compose.onNodeWithContentDescription("Time range").performClick()
         compose.runOnIdle { assertEquals(1, speedClicks); assertEquals(1, rangeClicks); available = false }
         compose.onNodeWithContentDescription("Play animation").assertIsNotEnabled()
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "No animation available"))
         compose.onNodeWithTag("radar_scrubber").assertIsNotEnabled()
-            .assert(SemanticsMatcher.keyNotDefined(SemanticsActions.SetProgress))
+        val beforeDisabled = fraction
+        compose.onNodeWithTag("radar_scrubber").performTouchInput { click(Offset(1f, center.y)) }
+        compose.runOnIdle { assertEquals(beforeDisabled, fraction, .001f) }
         compose.onNodeWithText("SAVED").assertIsDisplayed()
         saveControls("radar-controls-saved-fallback")
     }
