@@ -585,7 +585,10 @@ private fun RadarView(
             { tileLoading = it },
             { frameWaiting = it },
             { mapError = it },
-            { controller = it },
+            {
+                controller = it
+                it.setControlInset(with(density) { transportHeight.roundToPx() } + (20 * density.density).roundToInt())
+            },
             Modifier.fillMaxSize(),
         )
         if (session.showingSavedView)
@@ -848,7 +851,7 @@ private fun RadarLegend(
                     .semantics { contentDescription = "Choose radar layer" },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text(radarOverlays[session.overlay].orEmpty(), fontSize = if (compact) 12.sp else 13.sp,
+                    Text(radarOverlays[session.overlay].orEmpty(), fontSize = if (compact) 12.sp else 13.sp, lineHeight = 18.sp,
                         fontWeight = FontWeight.SemiBold, maxLines = 1)
                     Icon(Icons.Rounded.KeyboardArrowDown, null, Modifier.size(16.dp), tint = muted)
                 }
@@ -883,7 +886,7 @@ private fun RadarLegend(
                     session.effectiveRange != "now" -> "in/hr · RRFS simulated"
                     else -> "in/hr · approximate"
                 }
-                Text(caption, fontSize = 9.sp, color = muted, modifier = Modifier.padding(top = 5.dp))
+                Text(caption, fontSize = 9.sp, lineHeight = 13.sp, color = muted, modifier = Modifier.padding(top = 5.dp))
             }
         }
     }

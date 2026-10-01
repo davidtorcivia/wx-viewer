@@ -81,7 +81,7 @@ internal fun RadarTransport(
             verticalAlignment = Alignment.CenterVertically) {
             RadarPlaybackButton(playing, enabled, onPlay)
             Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
-                Text(stamp, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Text(stamp, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                 RadarScrubber(fraction, enabled, onScrub, compact = true)
             }
             RadarPill(range, "Time range", onRange)
@@ -95,19 +95,19 @@ internal fun RadarTransport(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (loading) CircularProgressIndicator(Modifier.padding(end = 6.dp).size(10.dp),
                         color = muted, strokeWidth = 1.25.dp)
-                    Text(badge, fontSize = 9.sp, color = muted, fontWeight = FontWeight.Medium,
+                    Text(badge, fontSize = 9.sp, lineHeight = 12.sp, color = muted, fontWeight = FontWeight.Medium,
                         letterSpacing = .6.sp, maxLines = 1)
                 }
             }
             if (largeType) {
                 Column {
-                    Text(stamp, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                    Text(stamp, fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
                         modifier = Modifier.testTag("radar_frame_stamp"))
                     status()
                 }
             } else Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically) {
-                Text(stamp, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                Text(stamp, fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
                     modifier = Modifier.weight(1f).testTag("radar_frame_stamp"))
                 status()
             }
@@ -171,7 +171,7 @@ private fun RadarPill(label: String, description: String, onClick: () -> Unit,
     Box(modifier.defaultMinSize(minWidth = 56.dp, minHeight = 44.dp).clip(CircleShape)
         .clickable(role = Role.Button, onClick = onClick)
         .semantics { contentDescription = description }, contentAlignment = Alignment.Center) {
-        Text(label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+        Text(label, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold,
             modifier = Modifier.background(MaterialTheme.colorScheme.onSurface.copy(alpha = .045f), CircleShape)
                 .padding(horizontal = 13.dp, vertical = 7.dp))
     }
@@ -224,7 +224,7 @@ internal fun RadarDistanceScale(label: String, width: Float, modifier: Modifier 
     val ink = MaterialTheme.colorScheme.onSurface
     Column(modifier.radarSurface(RoundedCornerShape(9.dp)).padding(horizontal = 8.dp, vertical = 5.dp)
         .testTag("radar_distance_scale"), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label, fontSize = 10.sp, color = ink, fontWeight = FontWeight.Medium)
+        Text(label, fontSize = 10.sp, lineHeight = 12.sp, color = ink, fontWeight = FontWeight.Medium)
         Canvas(Modifier.width(width.coerceIn(28f, 96f).dp).height(5.dp)) {
             val y = size.height - 1.dp.toPx()
             val weight = 1.dp.toPx()
@@ -240,7 +240,7 @@ internal fun RadarDistanceScale(label: String, width: Float, modifier: Modifier 
 internal fun RadarLegendTicks(ticks: List<Pair<Float, String>>, compact: Boolean) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     Layout(content = {
-        ticks.forEach { (_, label) -> Text(label, fontSize = if (compact) 8.sp else 9.sp,
+        ticks.forEach { (_, label) -> Text(label, fontSize = if (compact) 8.sp else 9.sp, lineHeight = if (compact) 10.sp else 12.sp,
             color = muted, maxLines = 1) }
     }, modifier = Modifier.fillMaxWidth().height(if (compact) 12.dp else 15.dp)) { measurables, constraints ->
         val labels = measurables.map { it.measure(constraints.copy(minWidth = 0, minHeight = 0)) }
