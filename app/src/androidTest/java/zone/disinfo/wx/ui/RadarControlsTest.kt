@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -78,10 +79,13 @@ class RadarControlsTest {
         var fraction by mutableStateOf(.35f)
         var speedClicks = 0
         var rangeClicks = 0
+        var expectedInk = Color.Unspecified
         compose.setContent {
             val density = LocalDensity.current.density
             CompositionLocalProvider(LocalDensity provides Density(density, if (large) 1.5f else 1f)) {
                 WxTheme(if (dark) ThemeMode.DARK else ThemeMode.LIGHT) {
+                    val themeInk = MaterialTheme.colorScheme.onSurface
+                    SideEffect { expectedInk = themeInk }
                     Box(Modifier.width(320.dp).height(480.dp).testTag("radar_controls_fixture")
                         .background(if (dark) Color(0xff303d42) else Color(0xffc9d2ca))) {
                         RadarDistanceScale("20 mi", 68f,
@@ -118,13 +122,43 @@ class RadarControlsTest {
                 .assertIsEnabled().assertHasClickAction()
                 .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button))
                 .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Paused"))
+            // Preserve the exact rendered failing state, even if the assertion below aborts.
+            saveControls("radar-controls-$mode")
             compose.onNodeWithTag("radar_frame_stamp", useUnmergedTree = true)
                 .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { getLayout ->
                     val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
-                    assertTrue(getLayout(layouts))
-                    assertTrue("Frame timestamp is clipped at $mode", layouts.none { it.hasVisualOverflow })
+                    assertTrue("Timestamp has no text-layout semantics at $mode", getLayout(layouts))
+                    assertFalse("Timestamp returned no layout at $mode", layouts.isEmpty())
+                    val diagnostics = layouts.mapIndexed { index, layout ->
+                        "layout[$index]: size=${layout.size.width}x${layout.size.height}; " +
+                            "multiParagraph=${layout.multiParagraph.width}x${layout.multiParagraph.height}; " +
+                            "overflowWidth=${layout.didOverflowWidth}; overflowHeight=${layout.didOverflowHeight}; " +
+                            "visualOverflow=${layout.hasVisualOverflow}; " +
+                            "fontScale=${layout.layoutInput.density.fontScale}; " +
+                            "fontSize=${layout.layoutInput.style.fontSize}; " +
+                            "lineHeight=${layout.layoutInput.style.lineHeight}; " +
+                            "lineCount=${layout.lineCount}; maxLines=${layout.layoutInput.maxLines}; " +
+                            "constraints=${layout.layoutInput.constraints}"
+                    }.joinToString("\n")
+                    File(deviceArtifactDirectory(instrumentation.targetContext),
+                        "radar-controls-$mode-layout.txt").writeText(diagnostics)
+                    assertTrue("Frame timestamp is clipped at $mode\n$diagnostics",
+                        layouts.none { it.hasVisualOverflow })
+                    layouts.forEach { layout ->
+                        assertEquals("Timestamp must use theme ink at $mode", expectedInk, layout.layoutInput.style.color)
+                    }
                 }
-            saveControls("radar-controls-$mode")
+            for (text in listOf("½×", "3½d", "20 mi")) {
+                compose.onNodeWithText(text, useUnmergedTree = true)
+                    .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { getLayout ->
+                        val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+                        assertTrue("No text layout for $text at $mode", getLayout(layouts))
+                        assertFalse(layouts.isEmpty())
+                        layouts.forEach { layout ->
+                            assertEquals("$text must use theme ink at $mode", expectedInk, layout.layoutInput.style.color)
+                        }
+                    }
+            }
         }
         compose.onNodeWithContentDescription("Play animation").performClick()
         compose.onNodeWithContentDescription("Pause animation")
