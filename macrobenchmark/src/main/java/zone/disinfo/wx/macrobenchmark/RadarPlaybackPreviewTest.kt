@@ -8,6 +8,8 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.Point
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
@@ -175,8 +177,16 @@ class RadarPlaybackPreviewTest {
             assertAdvances("replace-layer-$layer", minimumChanges = 3, durationMs = 6_000)
             pause()
         }
-        recoverAfterOffline(whilePlaying = false)
-        recoverAfterOffline(whilePlaying = true)
+        val recoveryFailures = mutableListOf<Throwable>()
+        for (playingBeforeLoss in listOf(false, true)) {
+            runCatching { recoverAfterOffline(whilePlaying = playingBeforeLoss) }
+                .onFailure { recoveryFailures += it }
+        }
+        if (recoveryFailures.isNotEmpty()) {
+            val failure = AssertionError("Offline recovery failed in ${recoveryFailures.size} phase(s)", recoveryFailures.first())
+            recoveryFailures.drop(1).forEach(failure::addSuppressed)
+            throw failure
+        }
     }
 
     @Test
@@ -350,50 +360,92 @@ class RadarPlaybackPreviewTest {
         val phase = if (whilePlaying) "playing" else "paused"
         val radios = mapOf("airplane" to shell("settings get global airplane_mode_on"),
             "wifi" to shell("settings get global wifi_on"), "data" to shell("settings get global mobile_data"))
+        var failure: Throwable? = null
+        fun rememberFailure(stage: String, error: Throwable) {
+            if (failure == null) failure = error else failure!!.addSuppressed(error)
+            emitDiagnostic("wxOfflineFailure", "$phase/$stage: $error")
+            // Capture the failing state BEFORE radio restoration changes the UI.
+            runCatching {
+                device.takeScreenshot(File(output(), "offline-$phase-$stage-failure.png"))
+                device.dumpWindowHierarchy(File(output(), "offline-$phase-$stage-failure.xml"))
+                record("offline-$phase-$stage-network", networkEvidence())
+            }
+        }
         try {
             pause()
-            // Wait for the production snapshot debounce, then prove the saved state is explicit.
+            // Allow a snapshot opportunity; offline must remain explicit even without one.
             SystemClock.sleep(3_000)
             if (whilePlaying) play()
             shell("cmd connectivity airplane-mode enable")
             shell("svc wifi disable")
             shell("svc data disable")
-            until(20_000, "offline saved/unavailable status") {
-                device.findObject(By.textContains("Saved")) != null ||
-                    device.findObject(By.textContains("unavailable")) != null ||
-                    device.findObject(By.text("Unavailable")) != null
+            try {
+                until(20_000, "Android confirms no active network") {
+                    context.getSystemService(ConnectivityManager::class.java).activeNetwork == null
+                }
+                record("offline-$phase-os-confirmed", networkEvidence())
+                until(20_000, "explicit offline/saved/unavailable status") {
+                    device.findObject(By.textContains("Offline")) != null ||
+                        device.findObject(By.text("OFFLINE")) != null ||
+                        device.findObject(By.textContains("Saved")) != null ||
+                        device.findObject(By.textContains("unavailable")) != null ||
+                        device.findObject(By.text("Unavailable")) != null
+                }
+                check(!await(By.desc("Play animation")).isEnabled) { "Playback must be disabled while offline" }
+                assertPaused("offline-$phase-fallback")
+                device.takeScreenshot(File(output(), "offline-$phase-fallback.png"))
+            } catch (error: Throwable) {
+                rememberFailure("status", error)
             }
-            assertPaused("offline-$phase-fallback")
-            device.takeScreenshot(File(output(), "offline-$phase-fallback.png"))
+            // Continue to verify reconnection even when the offline status assertion fails;
+            // retain and throw that original failure after collecting downstream evidence.
             shell("cmd connectivity airplane-mode disable")
             shell("svc wifi enable")
             shell("svc data enable")
-            until(90_000, "live map after connectivity returns") {
-                device.findObject(By.descContains("Last viewed area only. Alerts are not saved.")) == null &&
-                    device.findObject(By.textContains("unavailable")) == null &&
-                    device.findObject(By.text("Unavailable")) == null &&
-                    device.findObject(By.text("SAVED")) == null &&
-                    (device.findObject(By.desc("Play animation"))?.isEnabled == true ||
-                        device.findObject(By.desc("Pause animation"))?.isEnabled == true)
+            try {
+                until(90_000, "live map after connectivity returns") {
+                    device.findObject(By.descContains("Last viewed area only. Alerts are not saved.")) == null &&
+                        device.findObject(By.textContains("unavailable")) == null &&
+                        device.findObject(By.text("Unavailable")) == null &&
+                        device.findObject(By.text("OFFLINE")) == null &&
+                        device.findObject(By.text("SAVED")) == null &&
+                        (device.findObject(By.desc("Play animation"))?.isEnabled == true ||
+                            device.findObject(By.desc("Pause animation"))?.isEnabled == true)
+                }
+                awaitLive()
+                val restored = capture("online-$phase-restored")
+                if (whilePlaying) {
+                    // Recovery must restore user intent, rather than needing a second Play tap.
+                    await(By.desc("Pause animation"))
+                } else {
+                    assertPaused("online-preserves-paused-intent")
+                    play()
+                }
+                assertAdvances("offline-online-$phase-recovery", minimumChanges = 4, durationMs = 10_000)
+                pause()
+                requirePixelChange(restored, "online-$phase-recovered-native-pixels")
+                assertCameraResponds("online-$phase-recovered-native-pan")
+            } catch (error: Throwable) {
+                rememberFailure("reconnect", error)
             }
-            awaitLive()
-            val restored = capture("online-$phase-restored")
-            if (whilePlaying) {
-                // Recovery must restore user intent, rather than needing a second Play tap.
-                await(By.desc("Pause animation"))
-            } else {
-                assertPaused("online-preserves-paused-intent")
-                play()
-            }
-            assertAdvances("offline-online-$phase-recovery", minimumChanges = 4, durationMs = 10_000)
-            pause()
-            requirePixelChange(restored, "online-$phase-recovered-native-pixels")
-            assertCameraResponds("online-$phase-recovered-native-pan")
         } finally {
             shell("cmd connectivity airplane-mode ${if (radios["airplane"] == "1") "enable" else "disable"}")
             shell("svc wifi ${if (radios["wifi"] in listOf("1", "2")) "enable" else "disable"}")
             shell("svc data ${if (radios["data"] == "1") "enable" else "disable"}")
         }
+        failure?.let { throw it }
+    }
+
+    private fun networkEvidence(): JSONObject {
+        val manager = context.getSystemService(ConnectivityManager::class.java)
+        val network = manager.activeNetwork
+        val capabilities = network?.let(manager::getNetworkCapabilities)
+        return JSONObject().put("hasActiveNetwork", network != null)
+            .put("validated", capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true)
+            .put("airplaneMode", shell("settings get global airplane_mode_on"))
+            .put("wifiEnabled", shell("settings get global wifi_on"))
+            .put("mobileDataEnabled", shell("settings get global mobile_data"))
+            .put("frameStamp", runCatching { stamp() }.getOrNull() ?: JSONObject.NULL)
     }
 
     private fun assertControlGeometry() {
