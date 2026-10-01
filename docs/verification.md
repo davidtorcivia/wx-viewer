@@ -1,5 +1,11 @@
 # Verification
 
+## 0.2.3-preview candidate
+
+Version code 6 narrows the daily precipitation-dot column and reallocates that width to the temperature range. Layout coverage includes narrow phones, negative values, both temperature units, and the expanded hourly ribbon. Chart rendering is unchanged.
+
+This batch includes two test-only capture corrections from 0.2.2: bringing condition details into the viewport before taking closing-animation pixel samples, and using the existing AndroidX screenshot helper to redraw all windows before capture. The preceding a975beb build passed build/lint and all separate offline flows, but its ordinary device run had one clipped-capture error (64 passed, one failed, three staged skips). Fresh runtime validation remains required for this snapshot.
+
 ## 0.2.2-preview candidate
 
 Version code 5 corrects Radar controls left below the removed header, retains a clear saved-map status, removes the header theme shortcut, and adds symmetric card closing with subtle disclosure chevrons. Theme selection remains in Settings. The chart renderer is unchanged from `cd389569f989406c6ffbe608e228243c43cc6df6`.
@@ -20,7 +26,7 @@ The `preview` variant is minified and non-debuggable, uses the existing developm
 
 ## Device coverage
 
-There are 68 Android instrumentation methods: 65 ordinary scenarios plus three explicit seed/verify phases. The validation script reports ordinary-suite skips separately from those phases. Coverage includes navigation and persistence, supported precipitation types and stale/unknown handling, alert target selection, Rain watch lifecycle races, chart interactions, rendered daily-label centering, popup edge taps, cached forecasts/ensembles, and actual retained radar imagery.
+There are 76 Android instrumentation methods: 73 ordinary scenarios plus three explicit seed/verify phases. The validation script reports ordinary-suite skips separately from those phases. Coverage includes navigation and persistence, supported precipitation types and stale/unknown handling, alert target selection, Rain watch lifecycle races, chart interactions, rendered daily-label centering, popup edge taps, cached forecasts/ensembles, and actual retained radar imagery.
 
 `bash scripts/run-android-validation.sh` runs the ordinary suite and two additional flows:
 
