@@ -90,7 +90,11 @@ class WeatherPerformanceBenchmark {
                 scrollTo(By.desc("Temperature and wind for the next 48 hours"), heightDp = 428f)
             scrub(hourly, "Temperature and wind for the next 48 hours")
             val compactPlume =
-                scrollTo(By.descContains("Temperature ensemble plume"), heightDp = 210f)
+                scrollTo(
+                    By.descContains("Temperature ensemble plume"),
+                    heightDp = 210f,
+                    requirePlumeTime = true,
+                )
             scrub(compactPlume)
             repeat(3) { swipePage(up = true) }
             repeat(3) { swipePage(up = false) }
@@ -117,7 +121,12 @@ class WeatherPerformanceBenchmark {
                 device.findObject(By.desc("Play animation"))?.click()
                 SystemClock.sleep(1_000)
                 tapTab("Plumes")
-                val plume = scrollTo(By.descContains("Temperature ensemble plume"), heightDp = 250f)
+                val plume =
+                    scrollTo(
+                        By.descContains("Temperature ensemble plume"),
+                        heightDp = 250f,
+                        requirePlumeTime = true,
+                    )
                 scrub(plume)
                 tapTab("Weather")
                 awaitLoadedHero()
@@ -280,6 +289,7 @@ class WeatherPerformanceBenchmark {
         selector: BySelector,
         heightDp: Float? = null,
         heightPx: Int? = null,
+        requirePlumeTime: Boolean = false,
     ): UiObject2 {
         val density =
             InstrumentationRegistry.getInstrumentation().context.resources.displayMetrics.density
@@ -292,7 +302,14 @@ class WeatherPerformanceBenchmark {
                     heightPx
                         ?: heightDp?.let { (it * density).roundToInt() }
                         ?: (b.width() * 612.0 / 600).roundToInt()
-                if (b.height() >= fullHeight - 3 && kotlin.math.abs(b.top - targetTop) < 80)
+                val viewport = scrollViewport(node)
+                // A complete last chart can be lower than targetTop at the page's scroll limit.
+                // Verify its real geometry and visible readout, not an unreachable screen position.
+                if (
+                    b.height() >= fullHeight - 3 &&
+                        viewport.contains(b) &&
+                        (!requirePlumeTime || plumeTimeNear(b, viewport) != null)
+                )
                     return node
                 val delta =
                     (targetTop - b.top).coerceIn(
@@ -305,6 +322,30 @@ class WeatherPerformanceBenchmark {
         }
         captureFailure(device, "chart-not-visible")
         error("Complete chart did not enter viewport: $selector")
+    }
+
+    private fun scrollViewport(node: UiObject2): Rect {
+        var ancestor = node.parent
+        while (ancestor != null) {
+            if (ancestor.isScrollable) return ancestor.visibleBounds
+            ancestor = ancestor.parent
+        }
+        error("Chart has no accessible scrolling viewport")
+    }
+
+    private fun MacrobenchmarkScope.plumeTimeNear(chart: Rect, viewport: Rect): String? {
+        val time = Pattern.compile("(?i)(mon|tue|wed|thu|fri|sat|sun)\\s+\\d{1,2}:\\d{2}\\s*[ap]m")
+        return device
+            .findObjects(By.text(time))
+            .filter {
+                val readout = it.visibleBounds
+                viewport.contains(readout) &&
+                    readout.height() > 0 &&
+                    readout.bottom <= chart.top + 40 &&
+                    chart.top - readout.bottom < 350
+            }
+            .maxByOrNull { it.visibleBounds.bottom }
+            ?.text
     }
 
     private fun MacrobenchmarkScope.scrollPageBy(delta: Int) {
@@ -360,19 +401,9 @@ class WeatherPerformanceBenchmark {
                     points.drop(1)
             check(device.swipe(motion.toTypedArray(), 25)) { "Chart gesture injection failed" }
         }
-        val time = Pattern.compile("(?i)(mon|tue|wed|thu|fri|sat|sun)\\s+\\d{1,2}:\\d{2}\\s*[ap]m")
         fun current(): String? =
             if (stateProbe != null) chartState(stateProbe)
-            else {
-                device
-                    .findObjects(By.text(time))
-                    .filter {
-                        val readout = it.visibleBounds
-                        readout.bottom <= b.top + 40 && b.top - readout.bottom < 350
-                    }
-                    .maxByOrNull { it.visibleBounds.bottom }
-                    ?.text
-            }
+            else plumeTimeNear(b, scrollViewport(awaitObject(chartSelector)))
         fun observed(previous: String?): String {
             val deadline = SystemClock.elapsedRealtime() + 2_000
             do {
@@ -401,7 +432,13 @@ class WeatherPerformanceBenchmark {
             gesture(path)
             val first = observed(before)
             proof.put("first", first)
-            b = scrollTo(chartSelector, heightPx = b.height()).visibleBounds
+            b =
+                scrollTo(
+                        chartSelector,
+                        heightPx = b.height(),
+                        requirePlumeTime = stateProbe == null,
+                    )
+                    .visibleBounds
             val reversePath = pathFor(b).asReversed()
             proof
                 .put("reverseBounds", b.toShortString())
@@ -429,8 +466,9 @@ class WeatherPerformanceBenchmark {
     }
 
     private fun captureFailure(device: UiDevice, name: String) {
-        device.takeScreenshot(File(outputDirectory(), "$name.png"))
-        device.dumpWindowHierarchy(File(outputDirectory(), "$name.xml"))
+        val uniqueName = "$name-${SystemClock.elapsedRealtime()}"
+        device.takeScreenshot(File(outputDirectory(), "$uniqueName.png"))
+        device.dumpWindowHierarchy(File(outputDirectory(), "$uniqueName.xml"))
     }
 
     private fun chartState(description: String): String? {
