@@ -147,6 +147,28 @@ class RadarConnectivityStatusTest {
                 awaitOfflineCaption()
                 compose.onNodeWithText("OFFLINE").assertIsDisplayed()
 
+                // A disk-cached metadata timestamp must remain visible alongside Offline.
+                // It identifies metadata age without implying that a bitmap was saved.
+                val savedAt = Instant.parse("2026-09-30T12:34:00Z").toEpochMilli()
+                val agedCaption = "Offline · Saved Wed 12:34 PM UTC · Cached map areas only"
+                changeUi { session.frames = session.frames.copy(savedAt = savedAt) }
+                awaitUi(5_000, "cached metadata age") { statusText() == agedCaption }
+                compose.onNodeWithTag("radar_saved_timestamp").assertIsDisplayed().assertTextEquals(agedCaption)
+                capture("radar-offline-metadata-age-$phase-full")
+                changeUi { compact = true }
+                awaitUi(5_000, "compact cached metadata age") { statusText() == agedCaption }
+                compose.onNodeWithTag("radar_saved_timestamp").assertIsDisplayed().assertTextEquals(agedCaption)
+                val statusBounds = compose.onNodeWithTag("radar_saved_timestamp").fetchSemanticsNode().boundsInRoot
+                val expandBounds = compose.onNodeWithContentDescription("Open the radar full screen")
+                    .fetchSemanticsNode().boundsInRoot
+                assertTrue("Offline age must stay clear of the expand control", statusBounds.right <= expandBounds.left)
+                capture("radar-offline-metadata-age-$phase-compact")
+                changeUi {
+                    compact = false
+                    session.frames = session.frames.copy(savedAt = null)
+                }
+                awaitOfflineCaption()
+
                 restoreRadios(radios)
                 awaitUi(20_000, "OS connectivity restored") {
                     NetworkConnectivity.status(context) != NetworkAvailability.OFFLINE
@@ -236,6 +258,7 @@ class RadarConnectivityStatusTest {
 
     private fun networkEvidence(): String = JSONObject()
         .put("availability", NetworkConnectivity.status(context).name)
+        .put("visibleStatus", runCatching { statusText() }.getOrNull() ?: JSONObject.NULL)
         .put("activeNetworkPresent", context.getSystemService(ConnectivityManager::class.java).activeNetwork != null)
         .put("airplane", shell("settings get global airplane_mode_on"))
         .put("wifi", shell("settings get global wifi_on"))
