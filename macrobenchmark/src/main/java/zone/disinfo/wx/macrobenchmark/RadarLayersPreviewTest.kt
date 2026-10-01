@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.os.SystemClock
 import android.os.Bundle
+import android.os.Build
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -166,6 +167,8 @@ class RadarLayersPreviewTest {
 
     private fun settle(layer: String, range: Int) {
         await(By.text("$layer ▾"))
+        // Hold the initial observed/model frame before playback can race into a forecast.
+        device.findObject(By.desc("Pause animation"))?.click()
         // A selected menu is not proof of a loaded layer. Require loading to finish and
         // a native map to survive long enough for grid decoding and asynchronous labels.
         val end = SystemClock.elapsedRealtime() + 25_000
@@ -187,6 +190,7 @@ class RadarLayersPreviewTest {
     }
 
     private fun select(label: String) {
+        freshAccessibility()
         device.findObject(By.desc("Expand radar legend"))?.click()
         await(By.textEndsWith(" ▾")).click()
         // The popup is a scrollable Compose menu. Wait for it, and scroll its actual bounds;
@@ -213,13 +217,19 @@ class RadarLayersPreviewTest {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         await(By.pkg(target))
     }
+    private fun freshAccessibility() {
+        // Live map/Compose redraws can leave UiAutomator's cached tree behind the pixels.
+        if (Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
+    }
     private fun assertAlive() {
+        freshAccessibility()
         check(shell("pidof $target").isNotEmpty()) { "Preview process crashed" }
         check(device.currentPackageName == target) { "Preview left foreground: ${device.currentPackageName}" }
     }
     private fun await(selector: BySelector, matches: (UiObject2) -> Boolean = { true }): UiObject2 {
         val end = SystemClock.elapsedRealtime() + 20_000
         do {
+            freshAccessibility()
             device.findObjects(selector).firstOrNull { it.visibleBounds.height() > 0 && matches(it) }
                 ?.let { return it }
             SystemClock.sleep(100)
@@ -231,6 +241,7 @@ class RadarLayersPreviewTest {
     private fun output(): File = File(requireNotNull(args.getString("additionalTestOutputDir")))
         .also { check(it.exists() || it.mkdirs()) }
     private fun screenshot(name: String) {
+        freshAccessibility()
         device.takeScreenshot(File(output(), "$name.png"))
         device.dumpWindowHierarchy(File(output(), "$name.xml"))
     }
