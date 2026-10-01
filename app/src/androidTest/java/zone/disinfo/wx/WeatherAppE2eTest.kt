@@ -32,6 +32,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.printToString
 import androidx.compose.ui.text.AnnotatedString
 import androidx.test.core.app.ActivityScenario
+import androidx.test.core.app.takeScreenshot
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
@@ -500,7 +501,9 @@ class WeatherAppE2eTest {
     private fun screenshot(name: String) {
         compose.waitForIdle()
         val directory = deviceArtifactDirectory(context)
-        val bitmap = instrumentation.uiAutomation.takeScreenshot() ?: return
+        // AndroidX enables hardware drawing and redraws all roots (including menus)
+        // before capturing the next frame; raw UiAutomation can return a stale test frame.
+        val bitmap = takeScreenshot()
         File(directory, "$name.png").outputStream().use {
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
         }
