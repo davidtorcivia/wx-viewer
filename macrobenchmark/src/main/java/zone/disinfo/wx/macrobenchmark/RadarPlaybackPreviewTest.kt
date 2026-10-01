@@ -20,6 +20,13 @@ import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.UiScrollable
 import androidx.test.uiautomator.UiSelector
 import java.io.File
+import java.io.ByteArrayOutputStream
+import java.net.URL
+import java.time.Instant
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import javax.net.ssl.HttpsURLConnection
 import java.util.regex.Pattern
 import kotlin.math.abs
 import org.json.JSONArray
@@ -70,10 +77,8 @@ class RadarPlaybackPreviewTest {
         for (speed in listOf("½×", "¼×", "1×")) {
             await(By.desc("Animation speed")).click()
             await(By.desc("Animation speed")) { label(it) == speed }
-            play()
-            assertAdvances("speed-$speed", minimumChanges = 3, durationMs = 8_000,
-                minimumFrameIntervalMs = when (speed) { "½×" -> 700; "¼×" -> 1_600; else -> 250 })
-            pause()
+            assertSpeedPacing(speed,
+                when (speed) { "½×" -> 1_000L; "¼×" -> 2_000L; else -> 500L })
         }
 
         // Seeking while running must pause at the requested frame and remain there.
@@ -159,12 +164,45 @@ class RadarPlaybackPreviewTest {
     }
 
     @Test
-    fun coldRadarForecastAdvancesBeyondFirstFrameAndReplays() = runPreviewProof {
+    fun coldRadarFreshnessAndAvailableForecastPlayback() = runPreviewProof {
         coldStart()
         selectLayer("Radar")
         selectRange("Now")
         awaitLive()
         pause()
+        val metadata = diagnoseColdRadarMetadata()
+        check(!metadata.has("diagnosticError")) { "Cannot establish live radar freshness: $metadata" }
+        check(!metadata.isNull("source") && !metadata.isNull("freshnessAgeSeconds") &&
+            metadata.optInt("observedFrameCount") > 0) { "Incomplete live radar metadata: $metadata" }
+        val source = metadata.getString("source")
+        val age = metadata.getLong("freshnessAgeSeconds")
+        check(source.isNotBlank() && age >= -120L) { "Invalid live radar source/clock: $metadata" }
+        if (age > 600L || source != "mrms") {
+            if (age > 600L) await(By.textStartsWith("Radar delayed"))
+            scrub(.95f)
+            await(By.text("OBSERVED"))
+            check(device.findObject(By.textStartsWith("FORECAST +")) == null) {
+                "Stale/source-limited observed data must not acquire a motion forecast"
+            }
+            val reason = if (age > 600L) "upstream_scan_stale" else "source_has_no_motion_forecast"
+            val coverage = JSONObject().put("check", "fresh-live-motion-forecast")
+                .put("result", "UNAVAILABLE").put("exercised", false).put("reason", reason)
+                .put("source", source).put("freshnessAgeSeconds", age)
+            evidence.put(coverage)
+            emitDiagnostic("wxRadarCoverage", coverage.toString())
+            device.takeScreenshot(File(output(), "observed-only-radar.png"))
+            play()
+            assertAdvances("observed-only-radar-play", minimumChanges = 4, durationMs = 10_000,
+                forbidForecast = true)
+            pause()
+            assertPaused("observed-only-radar-paused")
+            play()
+            assertAdvances("observed-only-radar-replay", minimumChanges = 3, durationMs = 6_000,
+                forbidForecast = true)
+            pause()
+            assertCameraResponds("observed-only-radar-native-pan")
+            return@runPreviewProof
+        }
         // Forecast assets may take 55 seconds cold. The first-transition grace is deliberately
         // 90 seconds; once started, require sustained changes rather than one eventual tick.
         scrub(.95f)
@@ -182,6 +220,75 @@ class RadarPlaybackPreviewTest {
         pause()
         // Clear weather may produce identical rain pixels; panning proves the native view lives.
         assertCameraResponds("radar-camera-after-replay")
+        record("fresh-live-motion-forecast", JSONObject().put("exercised", true)
+            .put("source", source).put("freshnessAgeSeconds", age))
+    }
+
+    private fun diagnoseColdRadarMetadata(): JSONObject {
+        val connection = AtomicReference<HttpsURLConnection?>()
+        val executor = Executors.newSingleThreadExecutor { action ->
+            Thread(action, "radar-metadata-diagnostic").apply { isDaemon = true }
+        }
+        val future = executor.submit<JSONObject> {
+            val request = (URL("https://sref.disinfo.zone/api/radar/frames").openConnection()
+                as HttpsURLConnection).apply {
+                connectTimeout = 5_000
+                readTimeout = 5_000
+                instanceFollowRedirects = false
+                useCaches = false
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("User-Agent", "WX-Viewer-Android/1.0")
+            }
+            connection.set(request)
+            val result = JSONObject()
+            try {
+                val code = request.responseCode
+                result.put("httpStatus", code)
+                    .put("httpDate", request.getHeaderField("Date") ?: JSONObject.NULL)
+                    .put("httpAge", request.getHeaderField("Age") ?: JSONObject.NULL)
+                check(code in 200..299) { "Metadata diagnostic HTTP $code" }
+                val bytes = ByteArrayOutputStream()
+                request.inputStream.use { stream ->
+                    val buffer = ByteArray(8_192)
+                    while (true) {
+                        val count = stream.read(buffer)
+                        if (count < 0) break
+                        check(bytes.size() + count <= 262_144) { "Metadata diagnostic exceeded 256 KiB" }
+                        bytes.write(buffer, 0, count)
+                    }
+                }
+                val radar = JSONObject(bytes.toString("UTF-8")).optJSONObject("radar")
+                val past = radar?.optJSONArray("past") ?: JSONArray()
+                val newest = (0 until past.length()).mapNotNull {
+                    past.optJSONObject(it)?.optLong("time")?.takeIf { epoch -> epoch > 0 }
+                }.maxOrNull()
+                val deviceEpoch = Instant.now().epochSecond
+                result.put("source", radar?.optString("source") ?: JSONObject.NULL)
+                    .put("observedFrameCount", past.length())
+                    .put("newestObservedEpoch", newest ?: JSONObject.NULL)
+                    .put("deviceEpoch", deviceEpoch)
+                    .put("freshnessAgeSeconds", newest?.let { deviceEpoch - it } ?: JSONObject.NULL)
+            } catch (error: Throwable) {
+                result.put("diagnosticError", error.toString()).put("deviceEpoch", Instant.now().epochSecond)
+            } finally { request.disconnect() }
+            result
+        }
+        val result = try {
+            future.get(12, TimeUnit.SECONDS)
+        } catch (error: Exception) {
+            JSONObject().put("diagnosticError", error.toString()).put("deviceEpoch", Instant.now().epochSecond)
+        } finally {
+            future.cancel(true)
+            connection.get()?.disconnect()
+            executor.shutdownNow()
+        }
+        result.put("check", "cold-radar-public-metadata").put("diagnosticOnly", true)
+            .put("request", "https://sref.disinfo.zone/api/radar/frames")
+        // This request never fetches weather PNGs or changes the app's cache/freshness rules.
+        evidence.put(result)
+        File(output(), "cold-radar-metadata.json").writeText(result.toString(2))
+        emitDiagnostic("wxRadarMetadata", result.toString())
+        return result
     }
 
     private fun runPreviewProof(block: () -> Unit) {
@@ -196,13 +303,13 @@ class RadarPlaybackPreviewTest {
             failure = error
             runCatching { device.takeScreenshot(File(output(), "failure.png")) }
             runCatching { device.dumpWindowHierarchy(File(output(), "failure.xml")) }
-            runCatching {
-                instrumentation.sendStatus(0, Bundle().apply {
-                    putString("wxRadarFailure", error.toString())
-                    putString("wxRadarHierarchy", File(output(), "failure.xml").readText())
-                    putString("wxRadarLogcat", shell("logcat -d -t 180"))
-                })
-            }
+            emitDiagnostic("wxRadarFailure", error.toString())
+            emitDiagnostic("wxRadarHierarchy", runCatching {
+                File(output(), "failure.xml").readText()
+            }.getOrElse { "Hierarchy unavailable: $it" })
+            emitDiagnostic("wxRadarLogcat", runCatching {
+                shell("logcat -d -t 180").takeLast(48_000)
+            }.getOrElse { "Logcat unavailable: $it" })
             throw error
         } finally {
             File(output(), "playback-proof.json").writeText(JSONObject()
@@ -291,9 +398,43 @@ class RadarPlaybackPreviewTest {
         device.takeScreenshot(File(output(), "full-radar-controls.png"))
     }
 
+    private fun assertSpeedPacing(speed: String, minimumFramePeriodMs: Long) {
+        pause()
+        // Temperature 36h is hourly. Start in the middle, with ample room before wrap;
+        // frozen-map checks remain separate from this clock-pacing measurement.
+        scrub(.30f)
+        assertPaused("speed-$speed-anchor")
+        fun forecastHour(): Int = label(await(By.text(Pattern.compile("^\\+[0-9]+h$"))))
+            .removePrefix("+").removeSuffix("h").toInt()
+        val firstHour = forecastHour()
+        val firstStamp = stamp()
+        val started = SystemClock.elapsedRealtime()
+        play()
+        val window = when (speed) { "¼×" -> 16_000L; "½×" -> 8_000L; else -> 6_000L }
+        assertAdvances("speed-$speed", minimumChanges = 3, durationMs = window)
+        pause()
+        // Include all click/query/screenshot latency in the outer window. This makes the
+        // upper bound conservative instead of assigning a frame to an earlier UI poll.
+        val elapsed = SystemClock.elapsedRealtime() - started
+        val lastHour = forecastHour()
+        val advancedHours = lastHour - firstHour
+        check(advancedHours > 0) {
+            "speed-$speed lost its monotonic middle-range anchor: +${firstHour}h -> +${lastHour}h"
+        }
+        val maximumHours = elapsed / minimumFramePeriodMs + 1 // one endpoint quantization frame
+        check(advancedHours <= maximumHours) {
+            "speed-$speed advanced $advancedHours hourly frames in ${elapsed}ms; " +
+                "maximum $maximumHours for ${minimumFramePeriodMs}ms/frame including endpoint tolerance"
+        }
+        record("speed-$speed-pacing", JSONObject().put("firstForecastHour", firstHour)
+            .put("lastForecastHour", lastHour).put("firstStamp", firstStamp).put("lastStamp", stamp())
+            .put("elapsedMs", elapsed).put("minimumFramePeriodMs", minimumFramePeriodMs)
+            .put("advancedHours", advancedHours).put("maximumHours", maximumHours))
+    }
+
     private fun assertAdvances(name: String, minimumChanges: Int, durationMs: Long,
         firstChangeTimeoutMs: Long = 30_000, requireForecast: Boolean = false,
-        minimumFrameIntervalMs: Long = 0) {
+        forbidForecast: Boolean = false) {
         val samples = JSONArray()
         var previous = stamp()
         val seen = mutableSetOf(previous)
@@ -307,13 +448,13 @@ class RadarPlaybackPreviewTest {
             check(device.findObject(By.desc("Pause animation"))?.isEnabled == true) {
                 "$name stopped playing before sustained progress was established"
             }
-            val now = SystemClock.elapsedRealtime()
             val current = stamp()
-            sawForecast = sawForecast || device.findObject(By.textStartsWith("FORECAST +")) != null
+            // Accessibility queries can block. Timestamp the observation after reading it.
+            val now = SystemClock.elapsedRealtime()
+            val hasForecast = device.findObject(By.textStartsWith("FORECAST +")) != null
+            sawForecast = sawForecast || hasForecast
+            check(!forbidForecast || !hasForecast) { "$name extrapolated stale/source-limited observations" }
             if (current != previous) {
-                if (changes > 0 && minimumFrameIntervalMs > 0) check(now - lastChange >= minimumFrameIntervalMs) {
-                    "$name ignored the speed setting: frame interval ${now - lastChange} ms"
-                }
                 previous = current
                 changes++
                 seen += current
@@ -560,6 +701,18 @@ class RadarPlaybackPreviewTest {
         val end = SystemClock.elapsedRealtime() + timeoutMs
         do { fresh(); if (condition()) return; SystemClock.sleep(150) } while (SystemClock.elapsedRealtime() < end)
         error("Timed out waiting for $what; package=${device.currentPackageName}; pid=${shell("pidof $target")}")
+    }
+    private fun emitDiagnostic(key: String, value: String) {
+        // A missing hierarchy or oversized transaction must not suppress the other evidence.
+        val parts = value.chunked(6_000).ifEmpty { listOf("") }
+        parts.forEachIndexed { index, part ->
+            runCatching {
+                instrumentation.sendStatus(0, Bundle().apply {
+                    putString("${key}Part", "${index + 1}/${parts.size}")
+                    putString(key, part)
+                })
+            }
+        }
     }
     private fun record(name: String, result: JSONObject) {
         evidence.put(result.put("check", name).put("result", "passed"))

@@ -157,6 +157,7 @@ class RadarLayersPreviewTest {
                     device.findObject(By.desc("Pause animation"))?.click()
                     screenshot("offline-${slug(layer)}-$range")
                     results.put(JSONObject().put("layer", layer).put("rangeIndex", range)
+                        .put("range", label(await(By.desc("Time range"))))
                         .put("offline", true).put("result", "passed"))
                     instrumentation.sendStatus(0, Bundle().apply {
                         putString("wxRadarLayer", "offline $layer ${label(await(By.desc("Time range")))}: passed")
@@ -357,12 +358,24 @@ class RadarLayersPreviewTest {
         device.dumpWindowHierarchy(File(output(), "$name.xml"))
     }
     private fun reportFailure(failure: Throwable, imageName: String) {
-        runCatching {
-            instrumentation.sendStatus(0, Bundle().apply {
-                putString("wxRadarFailure", failure.toString())
-                putString("wxRadarHierarchy", File(output(), "$imageName.xml").readText())
-                putString("wxRadarLogcat", shell("logcat -d -t 180"))
-            })
+        emitDiagnostic("wxRadarFailure", failure.toString())
+        emitDiagnostic("wxRadarHierarchy", runCatching {
+            File(output(), "$imageName.xml").readText()
+        }.getOrElse { "Hierarchy unavailable: $it" })
+        emitDiagnostic("wxRadarLogcat", runCatching {
+            shell("logcat -d -t 180").takeLast(48_000)
+        }.getOrElse { "Logcat unavailable: $it" })
+    }
+    private fun emitDiagnostic(key: String, value: String) {
+        // A missing hierarchy or oversized transaction must not suppress the other evidence.
+        val parts = value.chunked(6_000).ifEmpty { listOf("") }
+        parts.forEachIndexed { index, part ->
+            runCatching {
+                instrumentation.sendStatus(0, Bundle().apply {
+                    putString("${key}Part", "${index + 1}/${parts.size}")
+                    putString(key, part)
+                })
+            }
         }
     }
     private fun saveProof(failures: List<String>) {
