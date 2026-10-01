@@ -61,8 +61,8 @@ class RadarLayersPreviewTest {
                             await(By.desc("Zoom out")).click()
                             // User map tap, popup dismissal, and camera movement.
                             device.click(device.displayWidth / 2, device.displayHeight / 2)
-                            SystemClock.sleep(700)
-                            device.findObject(By.desc("Close"))?.click()
+                            await(By.desc("Close")).click()
+                            freshAccessibility()
                             device.swipe(device.displayWidth / 2, device.displayHeight / 2,
                                 device.displayWidth / 2 + 70, device.displayHeight / 2 + 45, 18)
                             await(By.desc("Collapse radar legend")).click()
@@ -93,7 +93,7 @@ class RadarLayersPreviewTest {
                     failures += "$layer: $failure"
                     results.put(JSONObject().put("layer", layer).put("result", "failed")
                         .put("failure", failure.toString()))
-                    screenshot("${slug(layer)}-failure")
+                    screenshot("${slug(layer)}-failure", requireRadar = false)
                     File(output(), "${slug(layer)}-logcat.txt").writeText(shell("logcat -d -t 1500"))
                     // A crashing saved field must not prevent independent coverage of the rest.
                     shell("pm clear $target")
@@ -157,7 +157,7 @@ class RadarLayersPreviewTest {
             assertAlive()
         } catch (failure: Throwable) {
             failures += failure.toString()
-            screenshot("offline-failure")
+            screenshot("offline-failure", requireRadar = false)
             throw failure
         } finally {
             shell("cmd connectivity airplane-mode ${if(radios["airplane"] == "1") "enable" else "disable"}")
@@ -252,8 +252,15 @@ class RadarLayersPreviewTest {
     private fun slug(label: String) = label.lowercase().replace(Regex("[^a-z]+"), "-")
     private fun output(): File = File(requireNotNull(args.getString("additionalTestOutputDir")))
         .also { check(it.exists() || it.mkdirs()) }
-    private fun screenshot(name: String) {
+    private fun screenshot(name: String, requireRadar: Boolean = true) {
+        // Activity/accessibility focus can precede the first compositor frame after Home.
+        SystemClock.sleep(500)
         freshAccessibility()
+        if (requireRadar) {
+            assertAlive()
+            await(By.desc("Time range"))
+        }
+        SystemClock.sleep(150)
         device.takeScreenshot(File(output(), "$name.png"))
         device.dumpWindowHierarchy(File(output(), "$name.xml"))
     }
