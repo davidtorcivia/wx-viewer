@@ -15,8 +15,8 @@ import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.UiScrollable
 import androidx.test.uiautomator.UiSelector
-import androidx.test.uiautomator.Until
 import java.io.File
+import java.util.regex.Pattern
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assume.assumeTrue
@@ -33,6 +33,8 @@ class RadarLayersPreviewTest {
     private val target = "zone.disinfo.wx"
     private val layers = listOf("Temperature", "Dew point", "Wind", "Wind gusts", "Clouds",
         "Precip total", "Snow total", "Radar", "Satellite", "Radar + satellite")
+    private val menuItems = By.text(Pattern.compile(layers.filter { it != "Radar" }
+        .joinToString("|", "^(", ")$") { Pattern.quote(it) }))
     private val results = JSONArray()
 
     @Test
@@ -193,16 +195,26 @@ class RadarLayersPreviewTest {
         freshAccessibility()
         device.findObject(By.desc("Expand radar legend"))?.click()
         await(By.textEndsWith(" ▾")).click()
-        // The popup is a scrollable Compose menu. Wait for it, and scroll its actual bounds;
-        // a screen-relative swipe can land below the popup and dismiss it instead.
-        await(By.scrollable(true))
-        val menu = UiScrollable(UiSelector().scrollable(true)).setAsVerticalList()
-        check(menu.scrollIntoView(UiSelector().text(label))) { "Missing layer menu item $label" }
-        val choice = await(By.text(label)) {
-            it.visibleBounds.centerY() < device.displayHeight * .85
+        // Wait for actual menu entries. A menu that fits the screen is not marked scrollable.
+        await(menuItems)
+        freshAccessibility()
+        var choice = device.findObjects(By.text(label)).firstOrNull {
+            it.visibleBounds.height() > 0 && it.visibleBounds.centerY() < device.displayHeight * .85
+        }
+        if (choice == null) {
+            await(By.scrollable(true))
+            val menu = UiScrollable(UiSelector().scrollable(true)).setAsVerticalList()
+            check(menu.scrollIntoView(UiSelector().text(label))) { "Missing layer menu item $label" }
+            choice = await(By.text(label)) { it.visibleBounds.centerY() < device.displayHeight * .85 }
         }
         choice.click()
-        check(device.wait(Until.gone(By.scrollable(true)), 5_000)) { "Layer menu did not close" }
+        val closedBy = SystemClock.elapsedRealtime() + 5_000
+        do {
+            freshAccessibility()
+            if (device.findObjects(menuItems).isEmpty()) break
+            SystemClock.sleep(50)
+        } while (SystemClock.elapsedRealtime() < closedBy)
+        check(device.findObjects(menuItems).isEmpty()) { "Layer menu did not close" }
         await(By.text("$label ▾"))
     }
 
