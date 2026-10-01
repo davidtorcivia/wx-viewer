@@ -4,9 +4,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,7 +21,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.Layout
@@ -179,51 +175,42 @@ private fun RadarPill(label: String, description: String, onClick: () -> Unit,
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun RadarScrubber(value: () -> Float, enabled: Boolean, onValue: (Float) -> Unit,
     compact: Boolean = false) {
     val ink = MaterialTheme.colorScheme.onSurface
     val paper = MaterialTheme.colorScheme.surface
     val currentOnValue by rememberUpdatedState(onValue)
-    Canvas(Modifier.fillMaxWidth().height(if (compact) 20.dp else 30.dp)
-        .testTag("radar_scrubber")
-        .semantics {
-            contentDescription = "Radar frame time"
-            progressBarRangeInfo = ProgressBarRangeInfo(value().coerceIn(0f, 1f), 0f..1f)
-            stateDescription = "${(value().coerceIn(0f, 1f) * 100).toInt()} percent"
-            if (enabled) setProgress { currentOnValue(it.coerceIn(0f, 1f)); true }
-            else disabled()
-        }
-        .pointerInput(enabled) {
-            // One gesture owner handles the complete seek. Apply on press, not after an
-            // animation/native-map redraw can cancel the tap's up event. The same pointer
-            // remains captured through a drag; a release never hands the seek to the map.
-            awaitEachGesture {
-                val down = awaitFirstDown()
-                if (enabled) {
-                    fun seek(x: Float) {
-                        val inset = 7.dp.toPx()
-                        currentOnValue(((x - inset) / (size.width - inset * 2)
-                            .coerceAtLeast(1f)).coerceIn(0f, 1f))
-                    }
-                    down.consume()
-                    seek(down.position.x)
-                    drag(down.id) { change ->
-                        change.consume()
-                        seek(change.position.x)
-                    }
-                }
+    val progress = value().coerceIn(0f, 1f)
+    // Use Material's proven press/drag arbitration and native slider accessibility while
+    // retaining our small ink rail and thumb. It shares touch dispatch with the native map.
+    Slider(
+        value = progress,
+        onValueChange = { currentOnValue(it.coerceIn(0f, 1f)) },
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth().height(if (compact) 24.dp else 48.dp)
+            .testTag("radar_scrubber")
+            .semantics {
+                contentDescription = "Radar frame time"
+                stateDescription = "${(progress * 100).toInt()} percent"
+            },
+        thumb = {
+            Canvas(Modifier.size(14.dp)) {
+                drawCircle(paper, 7.dp.toPx())
+                drawCircle(ink.copy(alpha = if (enabled) .96f else .32f), 4.5.dp.toPx())
             }
-        }) {
-        val inset = 7.dp.toPx()
-        val y = size.height / 2
-        val end = size.width - inset
-        val x = inset + value().coerceIn(0f, 1f) * (end - inset)
-        drawLine(ink.copy(alpha = .16f), Offset(inset, y), Offset(end, y), 2.dp.toPx(), StrokeCap.Round)
-        if (enabled) drawLine(ink.copy(alpha = .70f), Offset(inset, y), Offset(x, y), 2.dp.toPx(), StrokeCap.Round)
-        drawCircle(paper, 7.dp.toPx(), Offset(x, y))
-        drawCircle(ink.copy(alpha = if (enabled) .96f else .32f), 4.5.dp.toPx(), Offset(x, y))
-    }
+        },
+        track = {
+            Canvas(Modifier.fillMaxWidth().height(2.dp)) {
+                val y = size.height / 2
+                drawLine(ink.copy(alpha = .16f), Offset(0f, y), Offset(size.width, y),
+                    2.dp.toPx(), StrokeCap.Round)
+                if (enabled) drawLine(ink.copy(alpha = .70f), Offset(0f, y),
+                    Offset(size.width * progress, y), 2.dp.toPx(), StrokeCap.Round)
+            }
+        },
+    )
 }
 
 @Composable
