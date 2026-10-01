@@ -782,7 +782,7 @@ private fun RadarView(
                     .padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(problem, fontSize = 12.sp, modifier = Modifier.weight(1f, false))
+                Text(problem, color = ink, fontSize = 12.sp, modifier = Modifier.weight(1f, false))
                 TextButton(onClick = { refresh++; mapError = null },
                     modifier = Modifier.heightIn(min = 44.dp)) {
                     Text("Retry", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
@@ -810,6 +810,7 @@ internal fun RadarInspectionPopup(
         Row(verticalAlignment = Alignment.Top) {
             Text(
                 inspection.lines.firstOrNull().orEmpty(),
+                color = ink,
                 fontFamily = Numbers,
                 fontSize =
                     if (inspection.lines.firstOrNull()?.contains("°") == true) 26.sp else 15.sp,
@@ -863,7 +864,7 @@ private fun RadarLegend(
                     .semantics { contentDescription = "Choose radar layer" },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text(radarOverlays[session.overlay].orEmpty(), fontSize = if (compact) 12.sp else 13.sp, lineHeight = 18.sp,
+                    Text(radarOverlays[session.overlay].orEmpty(), color = MaterialTheme.colorScheme.onSurface, fontSize = if (compact) 12.sp else 13.sp, lineHeight = 18.sp,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = if (LocalDensity.current.fontScale > 1.25f) 2 else 1,
                         overflow = TextOverflow.Ellipsis,

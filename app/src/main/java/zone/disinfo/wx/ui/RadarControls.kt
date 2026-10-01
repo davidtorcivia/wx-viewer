@@ -74,6 +74,7 @@ internal fun RadarTransport(
     onScrub: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val ink = MaterialTheme.colorScheme.onSurface
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val largeType = LocalDensity.current.fontScale > 1.25f
     if (compact) {
@@ -81,7 +82,7 @@ internal fun RadarTransport(
             verticalAlignment = Alignment.CenterVertically) {
             RadarPlaybackButton(playing, enabled, onPlay)
             Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
-                Text(stamp, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Text(stamp, color = ink, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                 RadarScrubber(fraction, enabled, onScrub, compact = true)
             }
             RadarPill(range, "Time range", onRange)
@@ -101,13 +102,13 @@ internal fun RadarTransport(
             }
             if (largeType) {
                 Column(Modifier.fillMaxWidth()) {
-                    Text(stamp, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 2,
+                    Text(stamp, color = ink, fontSize = 14.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 2,
                         modifier = Modifier.fillMaxWidth().testTag("radar_frame_stamp"))
                     status()
                 }
             } else Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically) {
-                Text(stamp, fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                Text(stamp, color = ink, fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
                     modifier = Modifier.weight(1f).testTag("radar_frame_stamp"))
                 status()
             }
@@ -171,7 +172,7 @@ private fun RadarPill(label: String, description: String, onClick: () -> Unit,
     Box(modifier.defaultMinSize(minWidth = 56.dp, minHeight = 44.dp).clip(CircleShape)
         .clickable(role = Role.Button, onClick = onClick)
         .semantics { contentDescription = description }, contentAlignment = Alignment.Center) {
-        Text(label, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold,
+        Text(label, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold,
             modifier = Modifier.background(MaterialTheme.colorScheme.onSurface.copy(alpha = .045f), CircleShape)
                 .padding(horizontal = 13.dp, vertical = 7.dp))
     }
