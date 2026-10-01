@@ -91,11 +91,11 @@ class RadarLayersPreviewTest {
                         }
                         screenshot("${slug(layer)}-$range")
                         results.put(JSONObject().put("layer", layer).put("rangeIndex", range)
-                            .put("range", await(By.desc("Time range")).text)
+                            .put("range", label(await(By.desc("Time range"))))
                             .put("playback", playback)
                             .put("result", "passed").put("pid", shell("pidof $target")))
                         instrumentation.sendStatus(0, Bundle().apply {
-                            putString("wxRadarLayer", "$layer ${await(By.desc("Time range")).text}: passed")
+                            putString("wxRadarLayer", "$layer ${label(await(By.desc("Time range")))}: passed")
                         })
                         await(By.desc("Time range")).click()
                     }
@@ -105,6 +105,7 @@ class RadarLayersPreviewTest {
                         .put("failure", failure.toString()))
                     screenshot("${slug(layer)}-failure", requireRadar = false)
                     File(output(), "${slug(layer)}-logcat.txt").writeText(shell("logcat -d -t 1500"))
+                    reportFailure(failure, "${slug(layer)}-failure")
                     // A crashing saved field must not prevent independent coverage of the rest.
                     shell("pm clear $target")
                     coldStart()
@@ -158,7 +159,7 @@ class RadarLayersPreviewTest {
                     results.put(JSONObject().put("layer", layer).put("rangeIndex", range)
                         .put("offline", true).put("result", "passed"))
                     instrumentation.sendStatus(0, Bundle().apply {
-                        putString("wxRadarLayer", "offline $layer ${await(By.desc("Time range")).text}: passed")
+                        putString("wxRadarLayer", "offline $layer ${label(await(By.desc("Time range")))}: passed")
                     })
                     await(By.desc("Time range")).click()
                 }
@@ -168,6 +169,7 @@ class RadarLayersPreviewTest {
         } catch (failure: Throwable) {
             failures += failure.toString()
             screenshot("offline-failure", requireRadar = false)
+            reportFailure(failure, "offline-failure")
             throw failure
         } finally {
             shell("cmd connectivity airplane-mode ${if(radios["airplane"] == "1") "enable" else "disable"}")
@@ -242,9 +244,8 @@ class RadarLayersPreviewTest {
     private fun select(label: String) {
         freshAccessibility()
         device.findObject(By.desc("Expand radar legend"))?.click()
-        val chooser = await(By.desc("Choose radar layer"))
-        val selected = chooser.text ?: chooser.findObjects(By.text(Pattern.compile(".+")))
-            .joinToString(" ") { it.text }
+        val chooser = await(By.res("radar_overlay"))
+        val selected = label(chooser)
         chooser.click()
         // Wait for an entry that cannot be the existing selected chip or the bottom tab.
         // A menu that fits the screen is not marked scrollable.
@@ -275,15 +276,45 @@ class RadarLayersPreviewTest {
         awaitSelected(label)
     }
 
-    private fun awaitSelected(label: String) = await(By.desc("Choose radar layer")) {
-        it.text == label || it.findObject(By.text(label)) != null
+    private fun awaitSelected(expected: String) = await(By.res("radar_overlay")) {
+        label(it) == expected
     }
 
+    private fun label(node: UiObject2): String {
+        node.text?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        // Compose exposes explicit descriptions as sibling leaves beside the visible Text.
+        // Read text from the nearest clickable control, never from the entire screen.
+        var control = node
+        if (!control.isClickable && !control.contentDescription.isNullOrEmpty()) {
+            var ancestor = control.parent
+            while (ancestor != null) {
+                if (ancestor.isClickable) { control = ancestor; break }
+                ancestor = ancestor.parent
+            }
+        }
+        return control.findObjects(By.text(Pattern.compile(".*\\S.*")))
+            .mapNotNull { it.text?.trim()?.takeIf(String::isNotEmpty) }.distinct().joinToString(" ")
+    }
+
+    private fun clickTab(name: String) {
+        // Material suppresses icon descriptions when labels are shown. The bottom-most label
+        // is the navigation item; an identical compact-map layer label can sit above it.
+        await(By.text(name)) { it.visibleBounds.centerY() > device.displayHeight * .75 }
+        val tab = device.findObjects(By.text(name))
+            .filter { it.visibleBounds.height() > 0 && it.visibleBounds.centerY() > device.displayHeight * .75 }
+            .maxBy { it.visibleBounds.bottom }
+        val control = tab.parent?.takeIf { it.isClickable || it.isSelected } ?: tab
+        if (!control.isSelected) control.click()
+        await(By.text(name)) {
+            it.visibleBounds.centerY() > device.displayHeight * .75 && it.parent?.isSelected == true
+        }
+        if (name == "Radar") await(By.res("radar_field"))
+    }
     private fun coldStart() {
         shell("am force-stop $target")
         launch()
-        await(By.text("Radar")) { it.visibleBounds.centerY() > device.displayHeight * .75 }.click()
-        await(By.desc("Time range"))
+        clickTab("Radar")
+        await(By.res("radar_field"))
     }
     private fun launch() {
         context.startActivity(Intent().setComponent(ComponentName(target, "zone.disinfo.wx.MainActivity"))
@@ -324,6 +355,15 @@ class RadarLayersPreviewTest {
         SystemClock.sleep(150)
         device.takeScreenshot(File(output(), "$name.png"))
         device.dumpWindowHierarchy(File(output(), "$name.xml"))
+    }
+    private fun reportFailure(failure: Throwable, imageName: String) {
+        runCatching {
+            instrumentation.sendStatus(0, Bundle().apply {
+                putString("wxRadarFailure", failure.toString())
+                putString("wxRadarHierarchy", File(output(), "$imageName.xml").readText())
+                putString("wxRadarLogcat", shell("logcat -d -t 180"))
+            })
+        }
     }
     private fun saveProof(failures: List<String>) {
         File(output(), "radar-layers-proof.json").writeText(JSONObject()
