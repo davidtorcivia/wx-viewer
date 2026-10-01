@@ -207,6 +207,23 @@ class OfflinePreviewSmokeTest {
     }
 
     private fun clickPlace(name: String) {
+        // Selecting a later chip intentionally scrolls it into view. Longer saved-data
+        // labels can move the earlier place name fully off-screen; reveal it like a user.
+        for (towardStart in listOf(true, false)) {
+            repeat(3) {
+                device.findObjects(By.text(name))
+                    .firstOrNull { it.visibleBounds.width() > 0 && it.visibleBounds.height() > 0 }
+                    ?.let { chip -> chip.click(); return }
+                val search = await(By.desc("Find a place")).visibleBounds
+                val left = (search.left * .12).toInt()
+                val right = (search.left * .88).toInt()
+                device.swipe(
+                    if (towardStart) left else right, search.centerY(),
+                    if (towardStart) right else left, search.centerY(), 24,
+                )
+                device.waitForIdle()
+            }
+        }
         await(By.text(name)).click()
     }
 
