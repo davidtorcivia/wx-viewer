@@ -2,6 +2,7 @@ package zone.disinfo.wx.ui
 
 import android.graphics.Bitmap
 import android.graphics.Color as AndroidColor
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import androidx.compose.foundation.background
@@ -51,6 +52,7 @@ import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import org.junit.Assert.*
@@ -244,23 +246,53 @@ class RadarControlsTest {
         val done = CountDownLatch(1)
         val error = AtomicReference<Throwable?>()
         val ready = AtomicBoolean(false)
+        val active = AtomicBoolean(true)
         val requested = AtomicBoolean(false)
+        val firstWrongSaved = AtomicBoolean(false)
+        val attempts = AtomicInteger(0)
+        val lastPixel = AtomicReference("no snapshot")
         val expected = listOf("#254e70", "#b56576", "#407d63")[index]
+        val color = AndroidColor.parseColor(expected)
+        val deadline = SystemClock.elapsedRealtime() + 25_000
         val listener = MapView.OnDidFinishRenderingFrameListener { fully, _, _ ->
-            if (fully && ready.get() && requested.compareAndSet(false, true)) {
-                view.getMapAsync { map ->
-                    map.snapshot { bitmap ->
-                        try {
-                            assertTrue(bitmap.width > 0 && bitmap.height > 0)
-                            val actual = bitmap.getPixel(bitmap.width / 2, bitmap.height / 2)
-                            val color = AndroidColor.parseColor(expected)
-                            assertTrue("Recreated native map rendered stale/blank pixels",
-                                abs(AndroidColor.red(actual) - AndroidColor.red(color)) <= 2 &&
-                                abs(AndroidColor.green(actual) - AndroidColor.green(color)) <= 2 &&
-                                abs(AndroidColor.blue(actual) - AndroidColor.blue(color)) <= 2)
-                            save("radar-same-id-native-$index", bitmap)
-                        } catch (failure: Throwable) { error.set(failure) }
-                        finally { done.countDown() }
+            if (fully && ready.get() && active.get() &&
+                SystemClock.elapsedRealtime() < deadline && requested.compareAndSet(false, true)) {
+                // A completion queued before styleLoaded can still describe the old frame.
+                // The snapshot pixels, rather than that callback, establish actual paint.
+                view.post {
+                    if (active.get()) view.getMapAsync { map ->
+                        map.snapshot { bitmap ->
+                            if (active.get()) {
+                                try {
+                                    attempts.incrementAndGet()
+                                    val actual = if (bitmap.width > 0 && bitmap.height > 0)
+                                        bitmap.getPixel(bitmap.width / 2, bitmap.height / 2) else 0
+                                    lastPixel.set("${bitmap.width}x${bitmap.height}: 0x${Integer.toHexString(actual)}")
+                                    val matches = bitmap.width > 0 && bitmap.height > 0 &&
+                                        AndroidColor.alpha(actual) == 255 &&
+                                        abs(AndroidColor.red(actual) - AndroidColor.red(color)) <= 2 &&
+                                        abs(AndroidColor.green(actual) - AndroidColor.green(color)) <= 2 &&
+                                        abs(AndroidColor.blue(actual) - AndroidColor.blue(color)) <= 2
+                                    if (matches) {
+                                        save("radar-same-id-native-$index", bitmap)
+                                        active.set(false)
+                                        done.countDown()
+                                    } else {
+                                        if (firstWrongSaved.compareAndSet(false, true))
+                                            save("radar-same-id-native-$index-first-wrong", bitmap)
+                                        requested.set(false)
+                                        view.post {
+                                            if (active.get() && SystemClock.elapsedRealtime() < deadline)
+                                                map.triggerRepaint()
+                                        }
+                                    }
+                                } catch (failure: Throwable) {
+                                    error.set(failure)
+                                    active.set(false)
+                                    done.countDown()
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -271,14 +303,21 @@ class RadarControlsTest {
                 // Deterministic native GL evidence isolates attachment from public tile availability.
                 map.setStyle(Style.Builder().fromJson("""{"version":8,"sources":{},"layers":[{"id":"native-proof","type":"background","paint":{"background-color":"$expected"}}]}""")) {
                     ready.set(true)
-                    view.invalidate()
+                    map.triggerRepaint()
                 }
             }
         }
         try {
-            assertTrue("Recreated MapView did not render a completed native frame", done.await(25, TimeUnit.SECONDS))
+            val remaining = (deadline - SystemClock.elapsedRealtime()).coerceAtLeast(0)
+            val completed = done.await(remaining, TimeUnit.MILLISECONDS)
+            val diagnostics = "expected=$expected; attempts=${attempts.get()}; last=${lastPixel.get()}; " +
+                "firstWrongSaved=${firstWrongSaved.get()}; completed=$completed"
+            File(deviceArtifactDirectory(instrumentation.targetContext),
+                "radar-same-id-native-$index-render.txt").writeText(diagnostics)
+            assertTrue("Recreated MapView never painted the expected style within 25s: $diagnostics", completed)
             error.get()?.let { throw AssertionError("Recreated native map screenshot failed", it) }
         } finally {
+            active.set(false)
             instrumentation.runOnMainSync { view.removeOnDidFinishRenderingFrameListener(listener) }
         }
     }
