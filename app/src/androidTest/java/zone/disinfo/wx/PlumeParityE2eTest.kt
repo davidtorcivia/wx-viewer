@@ -205,29 +205,24 @@ class PlumeParityE2eTest {
         compose.waitUntil(20_000) {
             compose.onAllNodesWithTag("plume_chart_3hrly-TMP").fetchSemanticsNodes().isNotEmpty()
         }
-        compose.onNodeWithTag("chart_style_bands").assertIsSelected()
-        compose
-            .onNodeWithTag("plume_chart_3hrly-TMP")
-            .assert(
-                SemanticsMatcher.expectValue(
-                    SemanticsProperties.StateDescription,
-                    "Bands · 60-hour forecast horizon",
-                )
-            )
+        compose.onNodeWithTag("plume_chart_3hrly-TMP").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription,
+                "Bands · 60-hour forecast horizon"))
         screenshot("plumes-full-default-synthetic")
-        compose.onNodeWithTag("chart_style_both").performClick().assertIsSelected()
-        compose
-            .onNodeWithTag("plume_chart_3hrly-TMP")
-            .assert(
-                SemanticsMatcher.expectValue(
-                    SemanticsProperties.StateDescription,
-                    "Both · 84-hour forecast horizon",
-                )
-            )
-        compose.onNodeWithTag("compare_run_1").performClick()
-        compose.onNodeWithTag("plume_chart_3hrly-TMP").performScrollTo().performTouchInput {
-            swipeLeft()
-        }
+        compose.onNodeWithTag("plume_tools").performClick()
+        compose.onNodeWithTag("plumes_scroll")
+            .performScrollToNode(hasTestTag("chart_style_bands"))
+        compose.onNodeWithTag("chart_style_bands").assertIsSelected()
+        compose.onNodeWithTag("chart_style_both").performScrollTo().performClick().assertIsSelected()
+        compose.onNodeWithTag("compare_run_1").performScrollTo().performClick()
+        screenshot("plumes-full-controls-synthetic")
+        compose.onNodeWithTag("plume_tools").performClick()
+        compose.onNodeWithTag("plumes_scroll")
+            .performScrollToNode(hasTestTag("plume_chart_3hrly-TMP"))
+        compose.onNodeWithTag("plume_chart_3hrly-TMP").assert(
+            SemanticsMatcher.expectValue(SemanticsProperties.StateDescription,
+                "Both · 84-hour forecast horizon"))
+        compose.onNodeWithTag("plume_chart_3hrly-TMP").performTouchInput { swipeLeft() }
         screenshot("plumes-full-temperature-scrub-synthetic")
         compose.onNodeWithTag("core_3hrly-TMP_Mean").performScrollTo().performClick()
         compose.onNodeWithTag("core_3hrly-TMP_Mean").performClick()
@@ -288,7 +283,7 @@ class PlumeParityE2eTest {
             .onNodeWithTag("weather_overview")
             .performScrollToNode(hasTestTag("plume_chart_Total-SNO"))
         compose.onNodeWithTag("plume_chart_Total-SNO").assertIsDisplayed()
-        compose.onNodeWithTag("compact_tab_SNOW").assertIsSelected()
+        compose.onNodeWithTag("compact_tab_SNOW").assertIsSelected().assertIsDisplayed()
         screenshot("plumes-compact-snow-synthetic")
     }
 
