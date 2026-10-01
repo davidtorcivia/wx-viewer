@@ -45,7 +45,7 @@ adb logcat -c
 suite_status=0
 # Run cold observed→forecast playback before the all-layer sweep can warm those assets.
 # Every proof targets the installed preview; the external test APK carries no app fixtures.
-for method in coldRadarForecastAdvancesBeyondFirstFrameAndReplays sustainedPlaybackPixelsAndInterruptedFlowsOnMinifiedPreview; do
+for method in coldRadarFreshnessAndAvailableForecastPlayback sustainedPlaybackPixelsAndInterruptedFlowsOnMinifiedPreview; do
  remote=/sdcard/Android/media/zone.disinfo.wx.macrobenchmark/radar-playback-$method
  mkdir -p "$output/playback-$method"
  set +e
