@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.ByteArrayOutputStream
@@ -203,6 +204,11 @@ class RadarOfflineIntegrationTest {
         }
         compose.onNodeWithTag("radar_saved_image").assertIsDisplayed()
         compose.onNodeWithTag("radar_saved_timestamp").assertIsDisplayed()
+        assertRadarControlsAtFieldTop(compose, hasSavedStatus = true)
+        compose.onNodeWithTag("radar_legend_collapse").performClick()
+        assertRadarControlsAtFieldTop(compose, hasSavedStatus = true)
+        compose.onNodeWithTag("radar_legend_expand").performClick()
+        assertRadarControlsAtFieldTop(compose, hasSavedStatus = true)
         compose.runOnIdle { selectedPlace.value = place.copy(id = "uncached-place", lat = 41.0) }
         compose.onNodeWithTag("radar_saved_image").assertDoesNotExist()
         compose.waitUntil(5_000) {
