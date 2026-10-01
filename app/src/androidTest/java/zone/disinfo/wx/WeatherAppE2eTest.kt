@@ -55,6 +55,7 @@ import zone.disinfo.wx.data.RainNowcastParser
 import zone.disinfo.wx.data.RainRequestCache
 import zone.disinfo.wx.data.SettingsStore
 import zone.disinfo.wx.data.Units
+import zone.disinfo.wx.ui.assertRadarControlsAtFieldTop
 
 /**
  * Real activity, Compose navigation, production SettingsStore and offline cache. The fixture is
@@ -164,6 +165,9 @@ class WeatherAppE2eTest {
         compose.onNodeWithTag("weather_overview").assertIsDisplayed()
         compose.onNodeWithTag("hero_temperature").assertTextContains("68", substring = true)
         // A fresh touch-mode launch must not focus/scroll to a below-fold chart.
+        compose.onNodeWithTag("toggle_theme").assertDoesNotExist()
+        compose.onNodeWithTag("find_place").assertIsDisplayed()
+        compose.onNodeWithTag("settings").assertIsDisplayed()
         screenshot("weather-launch-before-interaction")
         compose.onNodeWithTag("hero_temperature").assertIsDisplayed()
     }
@@ -270,7 +274,15 @@ class WeatherAppE2eTest {
             if (it == 0) {
                 compose.onNodeWithTag("radar_scrubber").assertIsDisplayed()
                 compose.onNodeWithTag("radar_overlay").assertIsDisplayed()
+                assertRadarControlsAtFieldTop(compose)
                 screenshot("radar-controls-offline-endpoint")
+                compose.onNodeWithTag("radar_legend_collapse").performClick()
+                compose.onNodeWithTag("radar_legend_expand").assertIsDisplayed()
+                assertRadarControlsAtFieldTop(compose)
+                screenshot("radar-controls-collapsed-offline-endpoint")
+                compose.onNodeWithTag("radar_legend_expand").performClick()
+                compose.onNodeWithTag("radar_overlay").assertIsDisplayed()
+                assertRadarControlsAtFieldTop(compose)
                 compose.onNodeWithTag("radar_overlay").performClick()
                 compose.onNodeWithText("Satellite", useUnmergedTree = true).assertIsDisplayed()
                 screenshot("radar-overlay-selector-offline-endpoint")
