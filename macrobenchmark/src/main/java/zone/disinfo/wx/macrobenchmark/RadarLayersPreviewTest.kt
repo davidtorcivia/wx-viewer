@@ -151,11 +151,13 @@ class RadarLayersPreviewTest {
                 repeat(ranges) { range ->
                     SystemClock.sleep(700)
                     assertAlive()
-                    val status = device.findObjects(By.textContains("Saved")) +
+                    val status = device.findObjects(By.textContains("Offline")) +
+                        device.findObjects(By.text("OFFLINE")) +
+                        device.findObjects(By.textContains("Saved")) +
                         device.findObjects(By.textContains("unavailable")) +
                         device.findObjects(By.text("Unavailable"))
-                    check(status.isNotEmpty()) { "Offline $layer must show saved/unavailable status" }
-                    device.findObject(By.desc("Pause animation"))?.click()
+                    check(status.isNotEmpty()) { "Offline $layer must show explicit offline/saved/unavailable status" }
+                    check(!await(By.desc("Play animation")).isEnabled) { "Offline $layer playback must be disabled" }
                     screenshot("offline-${slug(layer)}-$range")
                     results.put(JSONObject().put("layer", layer).put("rangeIndex", range)
                         .put("range", label(await(By.desc("Time range"))))
