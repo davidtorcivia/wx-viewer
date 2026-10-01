@@ -11,6 +11,7 @@ import android.graphics.Point
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.view.ViewConfiguration
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -91,7 +92,7 @@ class RadarPlaybackPreviewTest {
         scrub(.10f)
         assertPaused("scrub-back")
         requirePixelChange(late, "temperature-scrub-pixels")
-        dragScrubber(.10f, .65f)
+        dragScrubber(.65f)
         assertPaused("drag-scrub-during-play")
         play()
         assertAdvances("play-after-scrub", minimumChanges = 3, durationMs = 6_000)
@@ -700,11 +701,20 @@ class RadarPlaybackPreviewTest {
             device.takeScreenshot(File(output(), "seek-injection-diagnostic.png"))
         }.onFailure { emitDiagnostic("wxSeekInjection", "rail diagnostic failed: $it") }
     }
-    private fun dragScrubber(from: Float, to: Float) {
+    private fun dragScrubber(to: Float) {
         play()
         val bounds = await(By.res("radar_slider_track")).visibleBounds
-        check(device.swipe(bounds.left + (bounds.width() * from).toInt(), bounds.centerY(),
-            bounds.left + (bounds.width() * to).toInt(), bounds.centerY(), 30))
+        val thumb = await(By.res("radar_slider_thumb")).visibleBounds
+        val start = Point(thumb.centerX(), thumb.centerY())
+        val targetX = bounds.left + (bounds.width() * to).toInt()
+        val slop = ViewConfiguration.get(context).scaledTouchSlop
+        // Material3 discards the leading touch slop, so the pointer must travel that much
+        // beyond the requested thumb position. Playback may have moved the initial thumb.
+        val end = Point(targetX + if (targetX >= start.x) slop else -slop, start.y)
+        emitDiagnostic("wxPhysicalSeek", "drag request=$to bounds=$bounds start=$start end=$end slop=$slop")
+        // UiDevice's scalar swipe omits the last MOVE and lifts at the endpoint. Repeating
+        // the endpoint adds actual MOVE events there, which the slider needs before UP.
+        check(device.swipe(arrayOf(start, end, end), 30))
         await(By.desc("Play animation"))
         assertSeekPosition(to)
     }
