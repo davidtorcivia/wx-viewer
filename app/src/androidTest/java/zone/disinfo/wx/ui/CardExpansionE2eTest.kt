@@ -64,6 +64,12 @@ class CardExpansionE2eTest {
         node("condition_feels").performClick()
         val openHeight = height("condition_detail_row_feels")
         assertTrue(openHeight > 0)
+        // Scrolling to the trigger can leave its newly opened chart below the viewport.
+        // Position the detail while settled, with both triggers still available for real taps.
+        node("condition_detail_row_feels").performScrollTo().assertIsDisplayed()
+        node("condition_feels").assertIsDisplayed()
+        node("condition_dew").assertIsDisplayed()
+        assertPaintedFrame("condition_detail_row_feels", "condition-open")
         compose.mainClock.autoAdvance = false
 
         node("condition_feels").performClick()
@@ -93,7 +99,10 @@ class CardExpansionE2eTest {
         node("web_condition_detail_humidity").assertDoesNotExist()
         assertEquals(
             1,
-            compose.onAllNodesWithTag("web_condition_detail_feels", true).fetchSemanticsNodes().size,
+            compose
+                .onAllNodesWithTag("web_condition_detail_feels", true)
+                .fetchSemanticsNodes()
+                .size,
         )
         assertEquals(openHeight, height("condition_detail_row_feels"))
 
@@ -243,6 +252,12 @@ class CardExpansionE2eTest {
     }
 
     private fun assertPaintedFrame(tag: String, name: String) {
+        node(tag).assertIsDisplayed()
+        val bounds = node(tag).fetchSemanticsNode().boundsInRoot
+        assertTrue(
+            "$name needs a visible capture region, not only a positive layout height: $bounds",
+            bounds.width >= 1f && bounds.height >= 1f,
+        )
         val image = node(tag).captureToImage().asAndroidBitmap()
         val directory =
             deviceArtifactDirectory(InstrumentationRegistry.getInstrumentation().targetContext)
