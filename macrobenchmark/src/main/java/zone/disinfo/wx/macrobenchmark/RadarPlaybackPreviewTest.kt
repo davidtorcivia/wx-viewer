@@ -90,6 +90,8 @@ class RadarPlaybackPreviewTest {
         scrub(.10f)
         assertPaused("scrub-back")
         requirePixelChange(late, "temperature-scrub-pixels")
+        dragScrubber(.10f, .65f)
+        assertPaused("drag-scrub-during-play")
         play()
         assertAdvances("play-after-scrub", minimumChanges = 3, durationMs = 6_000)
         pause()
@@ -655,24 +657,46 @@ class RadarPlaybackPreviewTest {
 
     private fun scrub(fraction: Float) {
         val bounds = await(By.res("radar_scrubber")).visibleBounds
+        emitDiagnostic("wxPhysicalSeek", "tap request=$fraction bounds=$bounds before=${seekPercentage()} stamp=${stamp()}")
         check(device.click(bounds.left + (bounds.width() * fraction).toInt(), bounds.centerY())) {
             "Physical seek input could not be injected"
         }
         await(By.desc("Play animation"))
-        // Paused alone cannot prove a seek: earlier taps left the previous paused frame intact.
-        // Inspect the production progress state, allowing the small visual track inset.
-        until(5_000, "seek to ${(fraction * 100).toInt()} percent") {
-            if (device.findObject(By.res("radar_scrubber")) == null) return@until false
-            val state = instrumentation.uiAutomation.rootInActiveWindow
-            fun seekProgress(root: android.view.accessibility.AccessibilityNodeInfo?): Int? {
-                if (root == null) return null
-                if (root.viewIdResourceName == "radar_scrubber")
-                    return root.stateDescription?.toString()?.substringBefore(" percent")?.toIntOrNull()
-                for (index in 0 until root.childCount) seekProgress(root.getChild(index))?.let { return it }
-                return null
+        assertSeekPosition(fraction)
+    }
+    private fun dragScrubber(from: Float, to: Float) {
+        play()
+        val bounds = await(By.res("radar_scrubber")).visibleBounds
+        check(device.swipe(bounds.left + (bounds.width() * from).toInt(), bounds.centerY(),
+            bounds.left + (bounds.width() * to).toInt(), bounds.centerY(), 30))
+        await(By.desc("Play animation"))
+        assertSeekPosition(to)
+    }
+    private fun seekPercentage(): Float? {
+        fun visit(root: android.view.accessibility.AccessibilityNodeInfo?): Float? {
+            if (root == null) return null
+            if (root.isVisibleToUser && root.viewIdResourceName == "radar_scrubber") {
+                val range = root.rangeInfo
+                if (range != null && range.max > range.min)
+                    return (range.current - range.min) * 100f / (range.max - range.min)
+                return root.stateDescription?.toString()?.substringBefore(" percent")?.toFloatOrNull()
             }
-            val selected = seekProgress(state)
-            selected != null && abs(selected - fraction * 100) <= 3
+            for (index in 0 until root.childCount) visit(root.getChild(index))?.let { return it }
+            return null
+        }
+        return visit(instrumentation.uiAutomation.rootInActiveWindow)
+    }
+    private fun assertSeekPosition(fraction: Float) {
+        // Paused alone cannot prove a seek: earlier taps left the previous paused frame intact.
+        // Read the visible production slider's range, allowing only the small track inset.
+        var selected: Float? = null
+        try {
+            until(5_000, "seek to ${(fraction * 100).toInt()} percent") {
+                selected = seekPercentage()
+                selected?.let { abs(it - fraction * 100) <= 3 } == true
+            }
+        } finally {
+            emitDiagnostic("wxPhysicalSeek", "request=$fraction after=$selected stamp=${stamp()}")
         }
     }
     private fun pause() { device.findObject(By.desc("Pause animation"))?.click(); await(By.desc("Play animation")) }
