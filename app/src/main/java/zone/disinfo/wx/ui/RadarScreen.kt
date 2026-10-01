@@ -394,7 +394,7 @@ private fun RadarView(
     var controller by remember(session) { mutableStateOf<NativeRadarController?>(null) }
     val network by
         remember(context) { NetworkConnectivity.observe(context) }
-            .collectAsStateWithLifecycle(initialValue = NetworkAvailability.UNKNOWN)
+            .collectAsStateWithLifecycle(initialValue = remember(context) { NetworkConnectivity.status(context) })
     var wasOffline by remember(session) { mutableStateOf(false) }
     LaunchedEffect(network, session) {
         val offline = network == NetworkAvailability.OFFLINE
@@ -576,6 +576,12 @@ private fun RadarView(
     val latestScan = frames.filter { it.field == null && !it.satellite && it.leadMinutes == 0 }.maxOfOrNull { it.time }
     val delayedRadar = latestScan?.takeIf { wallTime - it > 600 }
         ?.let { "Radar delayed · last scan ${radarClock(it, timeZone, wallTime - it > 86_400)}" }
+    // Losing connectivity need not produce a bitmap or another metadata response. Label
+    // retained native tiles immediately, without claiming that a saved image exists.
+    val offlineStatus = if (network == NetworkAvailability.OFFLINE) {
+        if (frames.isNotEmpty()) "Offline · Cached map areas only"
+        else "Offline · ${radarUnavailable(session.overlay, session.effectiveRange)}"
+    } else null
     val ink = MaterialTheme.colorScheme.onSurface
     val paper = MaterialTheme.colorScheme.surface
     val density = LocalDensity.current
@@ -657,15 +663,18 @@ private fun RadarView(
                     )
             }
         if (compact && !session.showingSavedView)
-            session.frames.savedAt?.let { savedAt ->
+            (offlineStatus ?: session.frames.savedAt?.let { savedAt ->
+                "Saved ${radarClock(savedAt / 1000, timeZone, true)} · Cached map areas only"
+            })?.let { status ->
                 Text(
-                    "Saved ${radarClock(savedAt / 1000, timeZone, true)} · Cached map areas only",
+                    status,
                     fontSize = if (compact) 10.sp else 12.sp,
                     modifier =
                         Modifier.align(Alignment.TopCenter)
                             .padding(8.dp)
                             .background(paper.copy(alpha = .91f), RoundedCornerShape(8.dp))
-                            .padding(8.dp, 5.dp),
+                            .padding(8.dp, 5.dp)
+                            .testTag("radar_saved_timestamp"),
                 )
             }
         if (!compact) {
@@ -703,6 +712,7 @@ private fun RadarView(
                     when {
                         saved != null ->
                             "Saved ${radarClock(saved.savedAt / 1000, timeZone, true)} · Last viewed area"
+                        offlineStatus != null -> offlineStatus
                         savedAt != null ->
                             "Saved ${radarClock(savedAt / 1000, timeZone, true)} · Cached map areas only"
                         delayedRadar != null -> delayedRadar
@@ -751,6 +761,7 @@ private fun RadarView(
             ?: if (loading) "Loading…" else "Unavailable"
         val badge = when {
             session.showingSavedView -> "SAVED"
+            network == NetworkAvailability.OFFLINE -> "OFFLINE"
             frame == null -> ""
             frame.leadMinutes > 0 -> "FORECAST +${frame.leadMinutes}m"
             frame.field != null -> if (frame.source == "rtma") "OBSERVED" else "+${frame.forecastHour}h"
@@ -762,7 +773,7 @@ private fun RadarView(
             compact = compact,
             stamp = stamp,
             badge = badge,
-            loading = tileLoading && !session.showingSavedView,
+            loading = tileLoading && !session.showingSavedView && network != NetworkAvailability.OFFLINE,
             speed = listOf("1×", "½×", "¼×")[session.speed],
             range = radarRanges.first { it.first == session.effectiveRange }.second,
             fraction = sliderFraction,
