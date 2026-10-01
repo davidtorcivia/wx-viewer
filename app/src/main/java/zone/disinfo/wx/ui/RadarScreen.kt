@@ -579,8 +579,12 @@ private fun RadarView(
     // Losing connectivity need not produce a bitmap or another metadata response. Label
     // retained native tiles immediately, without claiming that a saved image exists.
     val offlineStatus = if (network == NetworkAvailability.OFFLINE) {
-        if (frames.isNotEmpty()) "Offline · Cached map areas only"
-        else "Offline · ${radarUnavailable(session.overlay, session.effectiveRange)}"
+        when {
+            frames.isEmpty() -> "Offline · ${radarUnavailable(session.overlay, session.effectiveRange)}"
+            session.frames.savedAt != null ->
+                "Offline · Saved ${radarClock(session.frames.savedAt!! / 1000, timeZone, true)} · Cached map areas only"
+            else -> "Offline · Cached map areas only"
+        }
     } else null
     val ink = MaterialTheme.colorScheme.onSurface
     val paper = MaterialTheme.colorScheme.surface
@@ -656,7 +660,7 @@ private fun RadarView(
                         fontSize = if (compact) 10.sp else 12.sp,
                         modifier =
                             Modifier.align(Alignment.TopCenter)
-                                .padding(8.dp)
+                                .padding(start = 8.dp, top = 8.dp, end = 60.dp)
                                 .background(paper.copy(alpha = .91f), RoundedCornerShape(8.dp))
                                 .padding(8.dp, 5.dp)
                                 .testTag("radar_saved_timestamp"),
@@ -671,7 +675,7 @@ private fun RadarView(
                     fontSize = if (compact) 10.sp else 12.sp,
                     modifier =
                         Modifier.align(Alignment.TopCenter)
-                            .padding(8.dp)
+                            .padding(start = 8.dp, top = 8.dp, end = 60.dp)
                             .background(paper.copy(alpha = .91f), RoundedCornerShape(8.dp))
                             .padding(8.dp, 5.dp)
                             .testTag("radar_saved_timestamp"),
