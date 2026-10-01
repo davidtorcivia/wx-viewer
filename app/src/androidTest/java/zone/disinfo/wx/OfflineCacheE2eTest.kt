@@ -1,6 +1,7 @@
 package zone.disinfo.wx
 
 import android.content.Context
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsDisplayed
@@ -9,8 +10,6 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.hasTestTag
-import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -145,24 +144,19 @@ class OfflineCacheE2eTest {
             }
         }
         compose.onNodeWithTag("hero_temperature").assertTextContains("68", substring = true)
-        compose.onNodeWithTag("weather_overview")
-            .performScrollToNode(hasTestTag("compact_plumes"))
+        scrollToSection("weather_overview", "radar_plumes", "compact_plumes")
         compose.waitUntil(5_000) {
             compose.onAllNodesWithTag("compact_ensemble_cache_age").fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithTag("compact_ensemble_cache_age")
             .assertTextContains("older data", substring = true)
-        compose.onNodeWithTag("weather_overview")
-            .performScrollToNode(hasTestTag("open_full_plumes"))
         compose.onNodeWithTag("open_full_plumes").performScrollTo().performClick()
         compose.onNodeWithTag("full_plumes").assertIsDisplayed()
-        compose.onNodeWithTag("plumes_scroll")
-            .performScrollToNode(hasTestTag("section_TEMPERATURE"))
+        scrollToSection("plumes_scroll", "TEMPERATURE", "section_TEMPERATURE")
         compose.waitUntil(5_000) {
             compose.onAllNodesWithTag("plume_chart_3hrly-TMP").fetchSemanticsNodes().isNotEmpty()
         }
-        compose.onNodeWithTag("plumes_scroll")
-            .performScrollToNode(hasTestTag("plume_chart_3hrly-TMP"))
+        compose.onNodeWithTag("plume_chart_3hrly-TMP").performScrollTo()
         compose.onNodeWithTag("plume_chart_3hrly-TMP").assertIsDisplayed()
         scenario!!.close()
         scenario = null
@@ -175,6 +169,18 @@ class OfflineCacheE2eTest {
             }
         }
         compose.onNodeWithTag("hero_temperature").assertTextContains("68", substring = true)
+    }
+
+    private fun scrollToSection(listTag: String, sectionKey: String, targetTag: String) {
+        val list = compose.onNodeWithTag(listTag).fetchSemanticsNode()
+        // IndexForKey reads Compose layout state; invoke it on Main, like the card suites.
+        compose.runOnIdle {
+            val index = list.config[SemanticsProperties.IndexForKey](sectionKey)
+            assertTrue("Missing section $sectionKey", index >= 0)
+            assertTrue(checkNotNull(list.config[SemanticsActions.ScrollToIndex].action)(index))
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag(targetTag).performScrollTo().assertIsDisplayed()
     }
 
     private suspend fun preserve(namespace: String, identity: String) {
