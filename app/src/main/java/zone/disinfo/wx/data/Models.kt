@@ -71,6 +71,20 @@ data class Forecast(
     val dailySourceRun: String? = null,
 )
 
+/** Current-hour fallback only; a fresh download does not make an expired forecast current. */
+internal fun Forecast.currentTemperature(now: Long = System.currentTimeMillis()): Double? =
+    observation?.tempF ?: hours.lastOrNull { it.timeMillis <= now }
+        ?.takeIf { now < it.timeMillis + 3_600_000L }?.tempF
+
+/** Chips have no timestamp line, so visibly distinguish retained, older, and forecast values. */
+internal fun Forecast.temperatureLabel(cached: Boolean, now: Long = System.currentTimeMillis()): String? =
+    when {
+        cached -> "saved"
+        observation?.tempF == null -> "forecast"
+        now - observation.timeMillis > 90 * 60_000L -> "older"
+        else -> null
+    }
+
 enum class CacheAge {
     FRESH,
     STALE,
