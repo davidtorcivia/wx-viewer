@@ -20,10 +20,15 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.CacheDrawScope
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.layer.CompositingStrategy
+import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
@@ -35,6 +40,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.content.res.ResourcesCompat
 import java.time.Instant
@@ -65,14 +72,29 @@ internal fun chartTypeface(): Typeface {
 }
 
 /**
- * Record the stable chart once per data/style/size change. Cursor state is read only by the
- * returned overlay, so scrubbing replays retained native paths and text without rebuilding them.
+ * Retain the stable chart once per data/style/size change. Cursor state is read only by the
+ * returned overlay, so scrubbing composites the cached texture without rasterizing paths and text.
  */
 @Composable
 internal fun CachedNativeChart(
     modifier: Modifier,
     vararg cacheKeys: Any?,
     buildDrawing: (NativeCanvas, Size) -> (NativeCanvas) -> Unit,
+) {
+    CachedLayerChart(modifier, *cacheKeys) { canvas, size ->
+        val overlay = buildDrawing(canvas, size)
+        val drawOverlay: (DrawScope) -> Unit = { scope ->
+            overlay(scope.drawContext.canvas.nativeCanvas)
+        }
+        drawOverlay
+    }
+}
+
+@Composable
+private fun CachedLayerChart(
+    modifier: Modifier,
+    vararg cacheKeys: Any?,
+    buildDrawing: CacheDrawScope.(NativeCanvas, Size) -> (DrawScope) -> Unit,
 ) {
     val drawing =
         remember(*cacheKeys) {
@@ -82,14 +104,36 @@ internal fun CachedNativeChart(
                     picture.beginRecording(ceil(size.width).toInt(), ceil(size.height).toInt())
                 val overlay = buildDrawing(canvas, size)
                 picture.endRecording()
+                val background = retainedChartLayer(picture)
                 onDrawBehind {
-                    val target = drawContext.canvas.nativeCanvas
-                    target.drawPicture(picture)
-                    overlay(target)
+                    drawLayer(background)
+                    overlay(this)
                 }
             }
         }
     Spacer(modifier.then(drawing))
+}
+
+private fun CacheDrawScope.retainedChartLayer(picture: Picture): GraphicsLayer {
+    // Offscreen explicitly requests a hardware texture; a retained display list alone still
+    // rasterizes these paths on RenderThread during scrubbing. CacheDrawScope owns and releases
+    // the layer on invalidation/detach, with no global bitmap cache or manual recycling.
+    val layer = obtainGraphicsLayer()
+    layer.compositingStrategy = CompositingStrategy.Offscreen
+    // Axis labels may overhang a chart edge. Offscreen textures clip at their own bounds,
+    // so retain that existing overflow while keeping native-pixel geometry and text resolution.
+    val outset = ceil(32f * density).toInt()
+    layer.topLeft = IntOffset(-outset, -outset)
+    layer.record(
+        size = IntSize(ceil(size.width).toInt() + 2 * outset, ceil(size.height).toInt() + 2 * outset)
+    ) {
+        val canvas = drawContext.canvas.nativeCanvas
+        canvas.save()
+        canvas.translate(outset.toFloat(), outset.toFloat())
+        canvas.drawPicture(picture)
+        canvas.restore()
+    }
+    return layer
 }
 
 private data class ChartFaceKey(val base: Typeface, val weight: Int, val width: Int)
@@ -950,6 +994,8 @@ private data class CachedSpiralSegment(val path: NativePath, val fill: Paint, va
 
 private data class CachedSpiralDrop(val path: NativePath, val fraction: Double)
 
+private data class CachedSpiralHighlight(val path: NativePath, val paint: Paint)
+
 private data class CachedWindArrow(
     val x: Float,
     val y: Float,
@@ -1044,7 +1090,7 @@ fun WebTemperatureSpiral(
     }
     val last = future.getOrNull(min(future.lastIndex.coerceAtLeast(0), 24))?.timeMillis ?: nowMillis
     val rowsForKeys = remember(future) { future.take(25) }
-    CachedNativeChart(
+    CachedLayerChart(
         modifier
             .fillMaxWidth()
             .aspectRatio(600f / 612f)
@@ -1342,28 +1388,18 @@ fun WebTemperatureSpiral(
             )
         }
         foreground.endRecording()
-        val selectionPaint = stroke(ink.toArgb(), 2.5f)
-        val drawOverlay: (NativeCanvas) -> Unit = { target ->
-            // Animation reads stay in the draw phase; the composition and cached geometry sleep.
-            val reveal = progress.value
-            val windReveal = windProgress.value
+        val highlights =
+            wedges.filter { !it.observed && it.row.tempF != null }.associate { hour ->
+                hour.row.timeMillis to
+                    CachedSpiralHighlight(
+                        spiralShape(hour.sa, hour.sb, rIn, rOut),
+                        fill(temperatureColor(hour.row.tempF).copy(alpha = .4f).toArgb()),
+                    )
+            }
+        val drawForecast: (NativeCanvas, Float, Float) -> Unit = { target, reveal, windReveal ->
             target.save()
             target.scale(scale, scale)
             target.translate(40f, 40f)
-            selection.value?.let { at ->
-                wedges
-                    .firstOrNull {
-                        !it.observed && it.row.timeMillis == (at / CHART_HOUR) * CHART_HOUR
-                    }
-                    ?.let { hour ->
-                        hour.row.tempF?.let {
-                            target.drawPath(
-                                spiralShape(hour.sa, hour.sb, rIn, rOut),
-                                fill(temperatureColor(it).copy(alpha = .4f).toArgb()),
-                            )
-                        }
-                    }
-            }
             target.save()
             target.clipPath(outline)
             target.clipOutPath(startCutout)
@@ -1383,10 +1419,36 @@ fun WebTemperatureSpiral(
             for (arrow in winds) arrow.draw(target, windShaftPaint, windHeadPaint)
             target.restore()
             target.drawPicture(foreground)
+        }
+        val finishedForecast = Picture()
+        val finishedCanvas =
+            finishedForecast.beginRecording(ceil(size.width).toInt(), ceil(size.height).toInt())
+        drawForecast(finishedCanvas, 1f, 1f)
+        finishedForecast.endRecording()
+        val forecastLayer = retainedChartLayer(finishedForecast)
+        val selectionPaint = stroke(ink.toArgb(), 2.5f)
+        val drawOverlay: (DrawScope) -> Unit = { scope ->
+            // Read animation/cursor state only in draw. The finished forecast keeps a separate
+            // texture so the selection wedge can still sit below the band, arrows and labels.
+            val reveal = progress.value
+            val windReveal = windProgress.value
+            val target = scope.drawContext.canvas.nativeCanvas
+            val selected = selection.value
             target.save()
             target.scale(scale, scale)
             target.translate(40f, 40f)
-            selection.value?.let { at ->
+            selected?.let { at ->
+                highlights[(at / CHART_HOUR) * CHART_HOUR]?.let { highlight ->
+                    target.drawPath(highlight.path, highlight.paint)
+                }
+            }
+            target.restore()
+            if (reveal >= 1f && windReveal >= 1f) scope.drawLayer(forecastLayer)
+            else drawForecast(target, reveal, windReveal)
+            target.save()
+            target.scale(scale, scale)
+            target.translate(40f, 40f)
+            selected?.let { at ->
                 val s0 = 24 + (at - nowMillis).toDouble() / CHART_HOUR
                 if (s0 >= 23 && s0 <= 48) {
                     val sv = min(47.9, (max(24.0, s0) + min(48.0, s0 + 1)) / 2)
