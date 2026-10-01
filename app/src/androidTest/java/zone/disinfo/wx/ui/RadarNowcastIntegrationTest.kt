@@ -26,6 +26,9 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.layers.PropertyFactory.rasterFadeDuration
 import org.maplibre.android.style.layers.RasterLayer
+import org.maplibre.android.style.layers.SymbolLayer
+import org.maplibre.android.style.layers.PropertyFactory.rasterOpacity
+import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.android.style.sources.ImageSource
 import zone.disinfo.wx.MainActivity
 import zone.disinfo.wx.deviceArtifactDirectory
@@ -310,6 +313,19 @@ class RadarNowcastIntegrationTest {
                                     RasterLayer("fixture", "fixture")
                                         .withProperties(rasterFadeDuration(0f))
                                 )
+                                // Reproduce the production satellite/nowcast reorder path
+                                // repeatedly with real native peers, then verify actual pixels.
+                                style.addLayer(RasterLayer("satellite-fixture", "fixture")
+                                    .withProperties(rasterOpacity(0f)))
+                                style.addSource(GeoJsonSource("labels-fixture",
+                                    "{\"type\":\"FeatureCollection\",\"features\":[]}"))
+                                style.addLayer(SymbolLayer("labels-fixture", "labels-fixture"))
+                                repeat(20) {
+                                    raiseRadarImageLayer(style, requireNotNull(style.getLayer("fixture")))
+                                    val order = style.layers.map { it.id }
+                                    assertTrue(order.indexOf("fixture") > order.indexOf("satellite-fixture"))
+                                    assertTrue(order.indexOf("fixture") < order.indexOf("labels-fixture"))
+                                }
                                 map.moveCamera(
                                     CameraUpdateFactory.newLatLngZoom(LatLng(40.7, -74.1), 8.0)
                                 )
