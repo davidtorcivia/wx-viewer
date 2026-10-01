@@ -9,4 +9,14 @@
         <item name="android:windowBackground">@color/app_background</item>
     </style>
     <style name="Theme.WxViewer" parent="Theme.WxViewer.Base" />
+    <style name="Theme.WxViewer.DatePicker.Light" parent="android:style/Theme.Material.Light.Dialog.Alert">
+        <item name="android:colorAccent">#141312</item>
+        <item name="android:colorBackground">#f3f0e8</item>
+        <item name="android:fontFamily">@font/anybody_text</item>
+    </style>
+    <style name="Theme.WxViewer.DatePicker.Dark" parent="android:style/Theme.Material.Dialog.Alert">
+        <item name="android:colorAccent">#efebe2</item>
+        <item name="android:colorBackground">#151413</item>
+        <item name="android:fontFamily">@font/anybody_text</item>
+    </style>
 </resources>
