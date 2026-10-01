@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -58,6 +59,53 @@ fun WebDailyForecast(
     val wetColor = precipitationColor(PrecipKind.RAIN, dark)
     val context = LocalContext.current
     val face = remember(context) { ResourcesCompat.getFont(context, R.font.anybody_variable) }
+    val density = LocalDensity.current.density
+    val lowPaint =
+        remember(face, density, ink) {
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                typeface = face
+                fontFeatureSettings = "tnum"
+                fontVariationSettings = "'wght' 500, 'wdth' 64.0"
+                textSize = 14 * density
+                color = ink.toArgb()
+                textAlign = Paint.Align.RIGHT
+            }
+        }
+    val highPaint =
+        remember(face, density, ink) {
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                typeface = face
+                fontFeatureSettings = "tnum"
+                fontVariationSettings = "'wght' 800, 'wdth' 58.0"
+                textSize = 20 * density
+                color = ink.toArgb()
+                textAlign = Paint.Align.LEFT
+            }
+        }
+    // Share measured gutters across days so the scale stays aligned, including -100°/100°.
+    // Keep the existing normal-weather gutters: all recovered rain width goes to the bars.
+    val leftGutter =
+        remember(days, units, lowPaint, density) {
+            max(
+                30 * density,
+                (days
+                    .mapNotNull { it.lowF }
+                    .maxOfOrNull {
+                        lowPaint.measureText(degrees(it, units))
+                    } ?: 0f) + 7 * density,
+            )
+        }
+    val rightGutter =
+        remember(days, units, highPaint, density) {
+            max(
+                34 * density,
+                (days
+                    .mapNotNull { it.highF }
+                    .maxOfOrNull {
+                        highPaint.measureText(degrees(it, units))
+                    } ?: 0f) + 7 * density,
+            )
+        }
     Column(modifier.fillMaxWidth().testTag("daily_forecast")) {
         days.forEach { day ->
             var expanded by rememberSaveable(day.date) { mutableStateOf(false) }
@@ -85,7 +133,7 @@ fun WebDailyForecast(
                     .testTag("day_${day.date}")
             ) {
                 Row(
-                    Modifier.fillMaxWidth().height(54.dp),
+                    Modifier.fillMaxWidth().height(54.dp).testTag("day_header_${day.date}"),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     WebText(
@@ -100,20 +148,24 @@ fun WebDailyForecast(
                         if (icon.isNotBlank()) SourceWeatherGlyph(icon, Modifier.size(24.dp), dark)
                     }
                     Canvas(
-                        Modifier.weight(1f).fillMaxHeight().semantics {
-                            contentDescription =
-                                "${degrees(day.lowF,units)} to ${degrees(day.highF,units)}"
-                        }
+                        Modifier.weight(1f)
+                            .fillMaxHeight()
+                            .testTag("day_temperature_${day.date}")
+                            .semantics {
+                                contentDescription =
+                                    "${degrees(day.lowF,units)} to ${degrees(day.highF,units)}"
+                            }
                     ) {
                         val d = density
                         val c = drawContext.canvas.nativeCanvas
-                        val l = 30 * d
-                        val plot = (size.width - 64 * d).coerceAtLeast(1f)
-                        fun x(value: Double) = l + ((value - low) / (high - low) * plot).toFloat()
+                        val plot = (size.width - leftGutter - rightGutter).coerceAtLeast(1f)
+                        fun x(value: Double) =
+                            leftGutter + ((value - low) / (high - low) * plot).toFloat()
                         if (day.highF != null) {
                             val a = day.lowF ?: day.highF
-                            val x0 = x(a)
-                            val x1 = x(day.highF)
+                            // A very small range still has a visible bar and two separate labels.
+                            val x1 = max(x(a) + 6 * d, x(day.highF)).coerceAtMost(leftGutter + plot)
+                            val x0 = min(x(a), x1 - 6 * d)
                             val paint =
                                 Paint(Paint.ANTI_ALIAS_FLAG).apply {
                                     shader =
@@ -130,29 +182,13 @@ fun WebDailyForecast(
                             c.drawRoundRect(
                                 x0,
                                 18 * d,
-                                max(x0 + 6 * d, x1),
+                                x1,
                                 38 * d,
                                 10 * d,
                                 10 * d,
                                 paint,
                             )
-                            fun number(
-                                value: Double,
-                                weight: Int,
-                                width: Float,
-                                size: Float,
-                                at: Float,
-                                align: Paint.Align,
-                            ) {
-                                val p =
-                                    Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                                        typeface = face
-                                        fontFeatureSettings = "tnum"
-                                        fontVariationSettings = "'wght' $weight, 'wdth' $width"
-                                        textSize = size * d
-                                        color = ink.toArgb()
-                                        textAlign = align
-                                    }
+                            fun number(value: Double, at: Float, p: Paint) {
                                 c.drawText(
                                     degrees(value, units),
                                     at,
@@ -161,27 +197,31 @@ fun WebDailyForecast(
                                 )
                             }
                             day.lowF?.let {
-                                number(it, 500, 64f, 14f, x0 - 5 * d, Paint.Align.RIGHT)
+                                number(it, x0 - 5 * d, lowPaint)
                             }
-                            number(day.highF, 800, 58f, 20f, x1 + 5 * d, Paint.Align.LEFT)
+                            number(day.highF, x1 + 5 * d, highPaint)
                         }
                     }
                     Canvas(
-                        Modifier.width(70.dp).height(14.dp).semantics {
-                            contentDescription =
-                                day.pop?.let {
-                                    "${it.roundToInt()} percent chance of precipitation"
-                                } ?: "Precipitation chance unavailable"
-                        }
+                        Modifier.width(36.dp)
+                            .height(22.dp)
+                            .testTag("day_precipitation_${day.date}")
+                            .semantics {
+                                contentDescription =
+                                    day.pop?.let {
+                                        "${it.roundToInt()} percent chance of precipitation"
+                                    } ?: "Precipitation chance unavailable"
+                            }
                     ) {
-                        val active = ((day.pop ?: 0.0) / 5).roundToInt()
+                        // Twenty 5% marks remain countable; five columns fit beside a wider range.
+                        val active = ((day.pop ?: 0.0) / 5).roundToInt().coerceIn(0, 20)
                         for (i in 0 until 20) drawRect(
                             if (i < active) wetColor else ink.copy(alpha = .13f),
                             androidx.compose.ui.geometry.Offset(
-                                (i % 10 * 8 - 16).dp.toPx(),
-                                (i / 10 * 8).dp.toPx(),
+                                (4 + i % 5 * 6).dp.toPx(),
+                                (i / 5 * 6).dp.toPx(),
                             ),
-                            androidx.compose.ui.geometry.Size(6.dp.toPx(), 6.dp.toPx()),
+                            androidx.compose.ui.geometry.Size(4.dp.toPx(), 4.dp.toPx()),
                         )
                     }
                     CardExpansionHint(
