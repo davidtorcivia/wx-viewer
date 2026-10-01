@@ -19,6 +19,10 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -119,6 +123,7 @@ fun PlumeScreen(
         }
     var help by remember { mutableStateOf(false) }
     var runMenu by remember { mutableStateOf(false) }
+    var showTools by rememberSaveable { mutableStateOf(false) }
     var minute by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var updated by remember { mutableLongStateOf(0L) }
     val life = LocalLifecycleOwner.current.lifecycle
@@ -213,21 +218,24 @@ fun PlumeScreen(
         add(PlumeParameter.WIND)
     }
     val wash = MaterialTheme.colorScheme.onSurface.copy(alpha = .06f)
+    val datePickerTheme = if (MaterialTheme.colorScheme.surface.luminance() < .5f)
+        R.style.Theme_WxViewer_DatePicker_Dark else R.style.Theme_WxViewer_DatePicker_Light
     Column(Modifier.fillMaxSize().testTag("full_plumes")) {
         Column(
             Modifier.background(MaterialTheme.colorScheme.surface)
                 .padding(top = 4.dp, bottom = 10.dp)
         ) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            FlowRow(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
                     "Plumes",
                     fontFamily = webFont(58f, 800),
-                    fontSize = 21.sp,
+                    fontSize = 30.sp,
                     fontWeight = FontWeight(800),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.align(Alignment.CenterVertically),
                 )
                 if (snow)
                     Text(
@@ -236,19 +244,6 @@ fun PlumeScreen(
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(end = 12.dp),
                     )
-                PlumePill(
-                    "?",
-                    onClick = { help = true },
-                    modifier = Modifier.height(38.dp).testTag("plume_help"),
-                )
-            }
-            Row(
-                Modifier.fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
                 PlumeSegments {
                     listOf("sref", "refs").forEach { m ->
                         PlumePill(
@@ -261,13 +256,28 @@ fun PlumeScreen(
                         )
                     }
                 }
+                IconButton(onClick = { showTools = !showTools }, modifier = Modifier.testTag("plume_tools")
+                    .semantics { selected = showTools }) {
+                    Icon(Icons.Outlined.Tune, "Plume controls", Modifier.size(21.dp))
+                }
+                IconButton(onClick = { help = true }, modifier = Modifier.testTag("plume_help")) {
+                    Icon(Icons.Outlined.Info, "About plumes", Modifier.size(21.dp))
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 PlumeSegments {
                     listOf("JFK", "LGA", "EWR").forEach { id ->
                         PlumePill(id, station == id, { station = id })
                     }
                     Box(
-                        Modifier.width(62.dp)
-                            .height(32.dp)
+                        Modifier.width(70.dp)
+                            .heightIn(min = 48.dp)
                             .background(wash, RoundedCornerShape(50))
                             .padding(horizontal = 6.dp),
                         contentAlignment = Alignment.Center,
@@ -286,7 +296,7 @@ fun PlumeScreen(
                                         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                                     ),
                             cursorBrush = SolidColor(MaterialTheme.colorScheme.onSurface),
-                            modifier = Modifier.testTag("plume_station"),
+                            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Station code" }.testTag("plume_station"),
                         )
                         if (customStation.isEmpty())
                             WebText(
@@ -303,83 +313,91 @@ fun PlumeScreen(
                         },
                     )
                 }
-                PlumePill(
-                    cycle.date,
-                    onClick = {
-                        val date = LocalDate.parse(cycle.date)
-                        DatePickerDialog(
-                                context,
-                                { _, y, m, d ->
-                                    epoch =
-                                        EnsembleCycle.at(
-                                                LocalDate.of(y, m + 1, d).toString(),
-                                                cycle.run,
-                                            )
-                                            .epoch
-                                    following = epoch == EnsembleCycle.latest(model).epoch
-                                },
-                                date.year,
-                                date.monthValue - 1,
-                                date.dayOfMonth,
-                            )
-                            .apply { datePicker.maxDate = System.currentTimeMillis() }
-                            .show()
-                    },
-                    modifier =
-                        Modifier.height(38.dp)
-                            .background(wash, RoundedCornerShape(50))
-                            .testTag("plume_date"),
-                )
-                Box {
+            }
+            androidx.compose.animation.AnimatedVisibility(showTools) {
+                FlowRow(
+                    Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
                     PlumePill(
-                        "${cycle.run}Z ▾",
-                        onClick = { runMenu = true },
-                        modifier =
-                            Modifier.height(38.dp)
-                                .background(wash, RoundedCornerShape(50))
-                                .testTag("plume_run"),
-                    )
-                    DropdownMenu(runMenu, { runMenu = false }) {
-                        (if (model == "refs") listOf("00", "06", "12", "18")
-                            else listOf("03", "09", "15", "21"))
-                            .forEach { run ->
-                                DropdownMenuItem(
-                                    text = { Text("${run}Z") },
-                                    onClick = {
-                                        epoch = EnsembleCycle.at(cycle.date, run).epoch
+                        cycle.date,
+                        onClick = {
+                            val date = LocalDate.parse(cycle.date)
+                            DatePickerDialog(
+                                    context,
+                                    datePickerTheme,
+                                    { _, y, m, d ->
+                                        epoch =
+                                            EnsembleCycle.at(
+                                                    LocalDate.of(y, m + 1, d).toString(),
+                                                    cycle.run,
+                                                )
+                                                .epoch
                                         following = epoch == EnsembleCycle.latest(model).epoch
-                                        runMenu = false
                                     },
+                                    date.year,
+                                    date.monthValue - 1,
+                                    date.dayOfMonth,
                                 )
-                            }
-                    }
-                }
-                PlumePill(
-                    "Share",
-                    onClick = {
-                        val url =
-                            "${normalizeServerUrl(serverUrl)}/plumes?model=$model&station=$station" +
-                                if (following) "" else "&run=${cycle.run}&date=${cycle.date}"
-                        context.startActivity(
-                            Intent.createChooser(
-                                Intent(Intent.ACTION_SEND)
-                                    .setType("text/plain")
-                                    .putExtra(Intent.EXTRA_TEXT, url),
-                                "Share plumes",
-                            )
+                                .apply { datePicker.maxDate = System.currentTimeMillis() }
+                                .show()
+                        },
+                        modifier =
+                            Modifier.heightIn(min = 48.dp)
+                                .background(wash, RoundedCornerShape(50))
+                                .testTag("plume_date"),
+                    )
+                    Box {
+                        PlumePill(
+                            "${cycle.run}Z ▾",
+                            onClick = { runMenu = true },
+                            modifier =
+                                Modifier.heightIn(min = 48.dp)
+                                    .background(wash, RoundedCornerShape(50))
+                                    .testTag("plume_run"),
                         )
-                    },
-                    modifier = Modifier.height(38.dp).background(wash, RoundedCornerShape(50)),
-                )
-                PlumePill(
-                    "Reload",
-                    onClick = { refresh++ },
-                    modifier =
-                        Modifier.height(38.dp)
-                            .background(wash, RoundedCornerShape(50))
-                            .testTag("reload_plumes"),
-                )
-                Spacer(Modifier.width(24.dp))
+                        DropdownMenu(runMenu, { runMenu = false }) {
+                            (if (model == "refs") listOf("00", "06", "12", "18")
+                                else listOf("03", "09", "15", "21"))
+                                .forEach { run ->
+                                    DropdownMenuItem(
+                                        text = { Text("${run}Z") },
+                                        onClick = {
+                                            epoch = EnsembleCycle.at(cycle.date, run).epoch
+                                            following = epoch == EnsembleCycle.latest(model).epoch
+                                            runMenu = false
+                                        },
+                                    )
+                                }
+                        }
+                    }
+                    PlumePill(
+                        "Share",
+                        onClick = {
+                            val url =
+                                "${normalizeServerUrl(serverUrl)}/plumes?model=$model&station=$station" +
+                                    if (following) "" else "&run=${cycle.run}&date=${cycle.date}"
+                            context.startActivity(
+                                Intent.createChooser(
+                                    Intent(Intent.ACTION_SEND)
+                                        .setType("text/plain")
+                                        .putExtra(Intent.EXTRA_TEXT, url),
+                                    "Share plumes",
+                                )
+                            )
+                        },
+                        modifier = Modifier.heightIn(min = 48.dp).background(wash, RoundedCornerShape(50)),
+                    )
+                    PlumePill(
+                        "Reload",
+                        onClick = { refresh++ },
+                        modifier =
+                            Modifier.heightIn(min = 48.dp)
+                                .background(wash, RoundedCornerShape(50))
+                                .testTag("reload_plumes"),
+                    )
+                }
             }
         }
         data.values.map { ensembleSavedAge(it.current, minute) }
@@ -393,8 +411,8 @@ fun PlumeScreen(
             item {
                 Column(
                     Modifier.fillMaxWidth()
-                        .padding(start = 16.dp, end = 16.dp, top = 8.dp)
-                        .clip(RoundedCornerShape(8.dp))
+                        .padding(start = 20.dp, end = 20.dp, top = 8.dp)
+                        .clip(RoundedCornerShape(16.dp))
                         .background(wash)
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -407,81 +425,86 @@ fun PlumeScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        WebText(
-                            "Compare",
-                            size = 13f,
-                            weight = 500,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.align(Alignment.CenterVertically),
-                        )
-                        (0..2).forEach { rank ->
-                            val checked = rank in visiblePrior
-                            val dark = MaterialTheme.colorScheme.surface.luminance() < .5f
-                            Row(
-                                Modifier.height(32.dp)
-                                    .clip(RoundedCornerShape(50))
-                                    .background(
-                                        if (checked)
-                                            MaterialTheme.colorScheme.onSurface.copy(
-                                                alpha = if (dark) .14f else .11f
-                                            )
-                                        else Color.Transparent
-                                    )
-                                    .toggleable(value = checked, role = Role.Checkbox) { enabled ->
-                                        visiblePrior =
-                                            if (enabled) visiblePrior + rank
-                                            else visiblePrior - rank
-                                    }
-                                    .padding(horizontal = 12.dp)
-                                    .testTag("compare_run_$rank"),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    androidx.compose.animation.AnimatedVisibility(showTools) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FlowRow(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.fillMaxWidth(),
                             ) {
-                                Box(
-                                    Modifier.size(16.dp, 4.dp)
-                                        .background(
-                                            plumeRunColor(rank, dark)
-                                                .copy(alpha = if (checked) 1f else .3f),
-                                            RoundedCornerShape(2.dp),
-                                        )
-                                )
                                 WebText(
-                                    "${cycle.previous(rank+1).run}Z",
+                                    "Compare",
                                     size = 13f,
-                                    weight = 700,
-                                    color =
-                                        if (checked) MaterialTheme.colorScheme.onSurface
-                                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    weight = 500,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.align(Alignment.CenterVertically),
                                 )
-                            }
-                        }
-                    }
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        WebText(
-                            "Chart",
-                            size = 13f,
-                            weight = 500,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        PlumeSegments {
-                            listOf("spaghetti" to "Lines", "bands" to "Bands", "both" to "Both")
-                                .forEach { (key, label) ->
-                                    PlumePill(
-                                        label,
-                                        styleMode == key,
-                                        { styleMode = key },
-                                        compact = true,
-                                        modifier = Modifier.testTag("chart_style_$key"),
-                                    )
+                                (0..2).forEach { rank ->
+                                    val checked = rank in visiblePrior
+                                    val dark = MaterialTheme.colorScheme.surface.luminance() < .5f
+                                    Row(
+                                        Modifier.heightIn(min = 48.dp)
+                                            .clip(RoundedCornerShape(50))
+                                            .background(
+                                                if (checked)
+                                                    MaterialTheme.colorScheme.onSurface.copy(
+                                                        alpha = if (dark) .14f else .11f
+                                                    )
+                                                else Color.Transparent
+                                            )
+                                            .toggleable(value = checked, role = Role.Checkbox) { enabled ->
+                                                visiblePrior =
+                                                    if (enabled) visiblePrior + rank
+                                                    else visiblePrior - rank
+                                            }
+                                            .padding(horizontal = 12.dp)
+                                            .testTag("compare_run_$rank"),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(7.dp),
+                                    ) {
+                                        Box(
+                                            Modifier.size(16.dp, 4.dp)
+                                                .background(
+                                                    plumeRunColor(rank, dark)
+                                                        .copy(alpha = if (checked) 1f else .3f),
+                                                    RoundedCornerShape(2.dp),
+                                                )
+                                        )
+                                        WebText(
+                                            "${cycle.previous(rank+1).run}Z",
+                                            size = 13f,
+                                            weight = 700,
+                                            color =
+                                                if (checked) MaterialTheme.colorScheme.onSurface
+                                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
                                 }
+                            }
+                            FlowRow(
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                WebText(
+                                    "Chart",
+                                    size = 13f,
+                                    weight = 500,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.align(Alignment.CenterVertically),
+                                )
+                                PlumeSegments {
+                                    listOf("spaghetti" to "Lines", "bands" to "Bands", "both" to "Both")
+                                        .forEach { (key, label) ->
+                                            PlumePill(
+                                                label,
+                                                styleMode == key,
+                                                { styleMode = key },
+                                                compact = true,
+                                                modifier = Modifier.testTag("chart_style_$key"),
+                                            )
+                                        }
+                                }
+                            }
                         }
                     }
                     if (ptypes.any { it.kind != null }) PrecipitationTypeStrip(ptypes)
@@ -565,21 +588,26 @@ private fun FullPlumeSection(
     val style = PlumePlotStyle(mode, cores.toSet(), knots)
     Column(
         Modifier.fillMaxWidth()
-            .padding(start = 16.dp, end = 16.dp, top = 36.dp)
+            .padding(start = 20.dp, end = 20.dp, top = 28.dp)
             .testTag("section_${section.name}")
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
+        FlowRow(
+            verticalArrangement = Arrangement.spacedBy(8.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.padding(bottom = 14.dp),
+            modifier = Modifier.padding(bottom = 8.dp),
         ) {
             Text(
-                if (section == PlumeParameter.SNOW) "Snowfall" else section.label,
+                if (!total) parameter.title else if (section == PlumeParameter.SNOW) "Snowfall" else section.label,
                 fontFamily = webFont(58f, 800),
-                fontSize = 34.sp,
+                fontSize = 30.sp,
                 lineHeight = 34.sp,
                 fontWeight = FontWeight.ExtraBold,
+                modifier = Modifier.align(Alignment.CenterVertically),
             )
+            if (section != PlumeParameter.WIND)
+                WebText(parameter.unit(Units.IMPERIAL), size = 14f,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.CenterVertically))
             if (section.total)
                 PlumeSegments {
                     PlumePill(
@@ -587,14 +615,14 @@ private fun FullPlumeSection(
                         total,
                         { total = true },
                         compact = true,
-                        modifier = Modifier.height(30.dp),
+                        modifier = Modifier.heightIn(min = 48.dp),
                     )
                     PlumePill(
                         "3-Hour",
                         !total,
                         { total = false },
                         compact = true,
-                        modifier = Modifier.height(30.dp).testTag("three_hour_${section.name}"),
+                        modifier = Modifier.heightIn(min = 48.dp).testTag("three_hour_${section.name}"),
                     )
                 }
         }
@@ -607,12 +635,6 @@ private fun FullPlumeSection(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Text(
-                    parameter.title,
-                    fontFamily = webFont(90f, 700),
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                )
                 if (section == PlumeParameter.WIND)
                     PlumeSegments {
                         PlumePill(
@@ -620,22 +642,16 @@ private fun FullPlumeSection(
                             knots,
                             { onKnots(true) },
                             compact = true,
-                            modifier = Modifier.height(30.dp),
+                            modifier = Modifier.heightIn(min = 48.dp),
                         )
                         PlumePill(
                             "mph",
                             !knots,
                             { onKnots(false) },
                             compact = true,
-                            modifier = Modifier.height(30.dp),
+                            modifier = Modifier.heightIn(min = 48.dp),
                         )
                     }
-                else
-                    Text(
-                        parameter.unit(Units.IMPERIAL),
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 (if (model == "sref") listOf("ARW" to "ARW", "NMB" to "NMB", "Mean" to "Mean")
@@ -796,38 +812,76 @@ private fun FullPlumeChart(
             }
         }
     val wash = ink.copy(alpha = .06f)
-    Row(
+    EnsemblePlot(
+        data,
+        parameter,
+        Units.IMPERIAL,
+        "America/New_York",
+        previous,
+        selected,
+        {
+            selected = it
+            release = 0
+        },
+        style = style,
+        onRelease = { release++ },
+        featured = featured,
+    )
+    Text(
+        "Forecast Time (Eastern)",
+        fontSize = 11.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth().padding(top = 5.dp),
+        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+    )
+    Column(
         Modifier.fillMaxWidth()
             .padding(top = 12.dp, bottom = 10.dp)
-            .height(60.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .heightIn(min = 64.dp)
+            .clip(RoundedCornerShape(16.dp))
             .background(if (selected != null) ink else wash)
-            .padding(start = 12.dp, end = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         val color = if (selected != null) paper else ink
-        Column {
-            val hours = (time - System.currentTimeMillis()).toDouble() / ENSEMBLE_HOUR
-            WebText(
-                if (selected == null) "Now"
-                else "${if(hours>=0)"+"else"−"}${(abs(hours)*2).roundToInt()/2.0}h",
-                size = 12f,
-                weight = 500,
-                lineHeight = 13.8f,
-                color = color.copy(alpha = .72f),
-            )
-            WebText(
-                plumeTime(time, "America/New_York", "EEE h:mm a"),
-                size = 16f,
-                width = 80f,
-                weight = 700,
-                lineHeight = 18.4f,
-                color = color,
-            )
+        FlowRow(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Column(Modifier.align(Alignment.CenterVertically)) {
+                val hours = (time - System.currentTimeMillis()).toDouble() / ENSEMBLE_HOUR
+                WebText(
+                    if (selected == null) "Now"
+                    else "${if(hours>=0)"+"else"−"}${(abs(hours)*2).roundToInt()/2.0}h",
+                    size = 12f,
+                    weight = 500,
+                    lineHeight = 13.8f,
+                    color = color.copy(alpha = .72f),
+                )
+                WebText(
+                    plumeTime(time, "America/New_York", "EEE h:mm a"),
+                    size = 16f,
+                    width = 80f,
+                    weight = 700,
+                    lineHeight = 18.4f,
+                    color = color,
+                )
+            }
+            Box(
+                Modifier.heightIn(min = 48.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(if (selected != null) paper else wash)
+                    .clickable { onOpenMap(parameter.mapLayer, time / 1000) }
+                    .padding(start = 14.dp, end = 8.dp)
+                    .testTag("plume_map_${parameter.api}"),
+                contentAlignment = Alignment.Center,
+            ) {
+                WebText("Map ›", size = 13f, weight = 700, color = ink)
+            }
         }
         Row(
-            Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             fun fmt(v: Double) = parameter.number(parameter.convert(v, Units.IMPERIAL, style.knots))
@@ -861,40 +915,7 @@ private fun FullPlumeChart(
                 }
             }
         }
-        Box(
-            Modifier.height(34.dp)
-                .clip(RoundedCornerShape(50))
-                .background(if (selected != null) paper else wash)
-                .clickable { onOpenMap(parameter.mapLayer, time / 1000) }
-                .padding(start = 14.dp, end = 8.dp)
-                .testTag("plume_map_${parameter.api}"),
-            contentAlignment = Alignment.Center,
-        ) {
-            WebText("Map ›", size = 13f, weight = 700, color = ink)
-        }
     }
-    EnsemblePlot(
-        data,
-        parameter,
-        Units.IMPERIAL,
-        "America/New_York",
-        previous,
-        selected,
-        {
-            selected = it
-            release = 0
-        },
-        style = style,
-        onRelease = { release++ },
-        featured = featured,
-    )
-    Text(
-        "Forecast Time (Eastern)",
-        fontSize = 11.sp,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.fillMaxWidth().padding(top = 5.dp),
-        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-    )
     statistics?.let { stats ->
         val values =
             listOf(
@@ -1066,7 +1087,7 @@ private fun PlumeCoreChip(
         else SolidColor(plumeVariableColor(parameter, dark))
     Row(
         modifier
-            .height(34.dp)
+            .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(50))
             .background(
                 if (active) ink.copy(alpha = if (dark) .08f else .06f) else Color.Transparent
@@ -1128,13 +1149,12 @@ private fun FullPlumeSummary(data: Map<PlumeParameter, PlumeBundle>, loading: Bo
             val strong = verdict == "high confidence"
             val moderate = verdict == "moderate spread"
             Box(
-                Modifier.height(26.dp)
+                Modifier.heightIn(min = 26.dp)
                     .clip(RoundedCornerShape(50))
                     .background(
-                        if (strong) ink
-                        else if (moderate) ink.copy(alpha = .11f) else Color.Transparent
+                        if (strong || moderate) ink.copy(alpha = .08f) else Color.Transparent
                     )
-                    .padding(horizontal = if (strong || moderate) 11.dp else 4.dp),
+                    .padding(horizontal = if (strong || moderate) 11.dp else 4.dp, vertical = 4.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 WebText(
@@ -1142,8 +1162,7 @@ private fun FullPlumeSummary(data: Map<PlumeParameter, PlumeBundle>, loading: Bo
                     size = 13f,
                     weight = 700,
                     color =
-                        if (strong) MaterialTheme.colorScheme.surface
-                        else if (moderate) ink else MaterialTheme.colorScheme.onSurfaceVariant,
+                        if (strong || moderate) ink else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

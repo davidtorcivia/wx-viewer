@@ -8,6 +8,11 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -97,9 +102,9 @@ fun WxTheme(themeMode: ThemeMode = ThemeMode.SYSTEM, content: @Composable () -> 
             surfaceDim = baseColors.surface,
             surfaceBright = baseColors.surface,
             surfaceContainerLowest = baseColors.surface,
-            surfaceContainerLow = baseColors.surface,
-            surfaceContainer = baseColors.surface,
-            surfaceContainerHigh = baseColors.surface,
+            surfaceContainerLow = androidx.compose.ui.graphics.lerp(baseColors.surface, baseColors.surfaceVariant, .45f),
+            surfaceContainer = androidx.compose.ui.graphics.lerp(baseColors.surface, baseColors.surfaceVariant, .65f),
+            surfaceContainerHigh = baseColors.surfaceVariant,
             surfaceContainerHighest = baseColors.surfaceVariant,
         )
     val view = LocalView.current
@@ -121,6 +126,10 @@ fun WxTheme(themeMode: ThemeMode = ThemeMode.SYSTEM, content: @Composable () -> 
         typography =
             Typography(
                 displayLarge = base.displayLarge.copy(fontFamily = Hero),
+                displayMedium = base.displayMedium.copy(fontFamily = Hero),
+                displaySmall = base.displaySmall.copy(fontFamily = Hero),
+                headlineSmall = base.headlineSmall.copy(fontFamily = Anybody, fontWeight = FontWeight.Bold),
+                titleSmall = base.titleSmall.copy(fontFamily = Anybody, fontWeight = FontWeight.SemiBold),
                 headlineLarge =
                     base.headlineLarge.copy(fontFamily = Anybody, fontWeight = FontWeight.Bold),
                 headlineMedium =
@@ -136,6 +145,13 @@ fun WxTheme(themeMode: ThemeMode = ThemeMode.SYSTEM, content: @Composable () -> 
                 labelMedium = base.labelMedium.copy(fontFamily = Anybody),
                 labelSmall = base.labelSmall.copy(fontFamily = Anybody),
             ),
+        shapes = Shapes(
+            extraSmall = RoundedCornerShape(8.dp),
+            small = RoundedCornerShape(12.dp),
+            medium = RoundedCornerShape(16.dp),
+            large = RoundedCornerShape(22.dp),
+            extraLarge = RoundedCornerShape(28.dp),
+        ),
         content = content,
     )
 }
@@ -229,7 +245,7 @@ fun WxApp(
                         if (index >= 0) placeScroll.animateScrollToItem(index)
                     }
                     Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
@@ -258,13 +274,14 @@ fun WxApp(
                                         else state.placeTemperatureLabels[place.id]
                                     val color = if (selected) paper else ink
                                     Row(
-                                        Modifier.height(40.dp)
+                                        Modifier.heightIn(min = 48.dp)
                                             .clip(CircleShape)
                                             .background(
                                                 if (selected) ink else ink.copy(alpha = .06f)
                                             )
-                                            .clickable { model.selectPlace(place.id) }
-                                            .padding(start = 6.dp, end = 15.dp),
+                                            .clickable(role = Role.Tab) { model.selectPlace(place.id) }
+                                            .semantics { this.selected = selected }
+                                            .padding(start = 6.dp, end = 15.dp, top = 6.dp, bottom = 6.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(9.dp),
                                     ) {
@@ -280,6 +297,8 @@ fun WxApp(
                                             500,
                                             color = color,
                                             maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.widthIn(max = 160.dp),
                                         )
                                         temp?.let {
                                             WebText(
@@ -299,7 +318,7 @@ fun WxApp(
                                 Box(
                                     Modifier.align(Alignment.CenterEnd)
                                         .width(28.dp)
-                                        .height(44.dp)
+                                        .height(56.dp)
                                         .background(
                                             Brush.horizontalGradient(
                                                 listOf(Color.Transparent, paper)
@@ -314,7 +333,7 @@ fun WxApp(
                                     showSearch = true
                                 },
                                 modifier =
-                                    Modifier.size(40.dp)
+                                    Modifier.size(48.dp)
                                         .background(ink.copy(alpha = .06f), CircleShape)
                                         .testTag("find_place"),
                             ) {
@@ -322,7 +341,7 @@ fun WxApp(
                             }
                             IconButton(
                                 onClick = { showSettings = true },
-                                modifier = Modifier.size(40.dp).testTag("settings"),
+                                modifier = Modifier.size(48.dp).testTag("settings"),
                             ) {
                                 Icon(Icons.Outlined.Settings, "Settings", Modifier.size(22.dp))
                             }
@@ -351,8 +370,10 @@ fun WxApp(
                                     NavigationBarItem(
                                         selected = page == title,
                                         onClick = { page = title },
-                                        icon = { Icon(icon, title) },
-                                        label = { Text(title) },
+                                        icon = { Icon(icon, null, Modifier.size(23.dp)) },
+                                        label = { WebText(title, 11f, 76f, if (page == title) 650 else 500,
+                                            color = if (page == title) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1) },
                                         modifier = Modifier.testTag("tab_${title.lowercase()}"),
                                         colors =
                                             NavigationBarItemDefaults.colors(
@@ -488,7 +509,7 @@ private fun SearchDialog(
     var query by rememberSaveable { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Find a place") },
+        title = { WebText("Find a place", 30f, 58f, 800) },
         text = {
             Column(Modifier.heightIn(max = 420.dp)) {
                 OutlinedTextField(
@@ -499,6 +520,8 @@ private fun SearchDialog(
                     },
                     label = { Text("City, ZIP or street address") },
                     singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    leadingIcon = { Icon(Icons.Outlined.Search, null, Modifier.size(21.dp)) },
                     modifier = Modifier.fillMaxWidth().testTag("place_search"),
                 )
                 TextButton(onClick = onLocate) {
@@ -522,9 +545,11 @@ private fun SearchDialog(
                                 model.addPlace(p)
                                 onDismiss()
                             },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                         ) {
-                            Column(Modifier.fillMaxWidth()) {
+                            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                 WebText(p.name.substringBefore(','), 16f, weight = 500)
                                 p.name
                                     .substringAfter(',', "")

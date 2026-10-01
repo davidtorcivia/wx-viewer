@@ -12,6 +12,8 @@ import android.graphics.Typeface
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
@@ -27,6 +29,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
@@ -149,6 +154,20 @@ fun CompactPlumes(
     var userSelected by remember(station.id) { mutableStateOf(false) }
     var showSnow by remember(station.id) { mutableStateOf(false) }
     val parameter = PlumeParameter.valueOf(selected)
+    val tabScroll = rememberScrollState()
+    var tabViewport by remember { mutableIntStateOf(0) }
+    var selectedTabBounds by remember { mutableStateOf(0 to 0) }
+    LaunchedEffect(parameter, selectedTabBounds, tabViewport) {
+        if (tabViewport > 0 && selectedTabBounds.second > selectedTabBounds.first) {
+            val (start, end) = selectedTabBounds
+            val target = when {
+                start < tabScroll.value -> start
+                end > tabScroll.value + tabViewport -> end - tabViewport
+                else -> tabScroll.value
+            }
+            tabScroll.animateScrollTo(target.coerceAtLeast(0))
+        }
+    }
     val cycle = remember(refreshRevision) { EnsembleCycle.latest("refs") }
     var bundle by remember(serverUrl, station.id, selected) {
         mutableStateOf(EnsembleRepository.peek(serverUrl, station.id, "refs", cycle, parameter.api)
@@ -217,6 +236,7 @@ fun CompactPlumes(
     }
     val dark = MaterialTheme.colorScheme.surface.luminance() < .5f
     Column(modifier.fillMaxWidth().testTag("compact_plumes")) {
+        Row(Modifier.fillMaxWidth().onSizeChanged { tabViewport = it.width }.horizontalScroll(tabScroll)) {
         PlumeSegments {
             compactParameters
                 .filter { it != PlumeParameter.SNOW || showSnow }
@@ -229,9 +249,15 @@ fun CompactPlumes(
                             selected = spec.name
                         },
                         compact = true,
-                        modifier = Modifier.testTag("compact_tab_${spec.name}"),
+                        modifier = Modifier.onGloballyPositioned { coordinates ->
+                            if (parameter == spec) {
+                                val start = coordinates.positionInParent().x.toInt()
+                                selectedTabBounds = start to (start + coordinates.size.width)
+                            }
+                        }.testTag("compact_tab_${spec.name}"),
                     )
                 }
+        }
         }
         Spacer(Modifier.height(12.dp))
         val b = bundle
@@ -362,7 +388,8 @@ fun CompactPlumes(
                 fontSize = 12.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier =
-                    Modifier.clickable { onFullPlumes(station.id) }.testTag("open_full_plumes"),
+                    Modifier.heightIn(min = 48.dp).clickable { onFullPlumes(station.id) }
+                        .wrapContentHeight().testTag("open_full_plumes"),
             )
         }
     }
@@ -426,12 +453,12 @@ internal fun PlumePill(
     val paper = MaterialTheme.colorScheme.surface
     Box(
         modifier
-            .heightIn(min = if (compact) 28.dp else 32.dp)
+            .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
             .clip(RoundedCornerShape(50))
             .background(if (selected) ink else Color.Transparent)
             .clickable(role = Role.Button, onClick = onClick)
             .semantics { this.selected = selected }
-            .padding(horizontal = if (compact) 11.dp else 12.dp),
+            .padding(horizontal = if (compact) 11.dp else 12.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
         WebText(

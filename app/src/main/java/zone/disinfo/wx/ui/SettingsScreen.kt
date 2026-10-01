@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -65,21 +66,21 @@ fun SettingsScreen(state: WxState, model: WxViewModel, onClose: () -> Unit, onLo
         }
     }
     Box(
-        Modifier.fillMaxSize().padding(16.dp).testTag("settings_screen"),
+        Modifier.fillMaxSize().testTag("settings_screen"),
         contentAlignment = Alignment.TopCenter,
     ) {
         Surface(
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(0.dp),
             color = MaterialTheme.colorScheme.surface,
             modifier = Modifier.widthIn(max = 720.dp).fillMaxWidth(),
         ) {
-            Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp)) {
                 Row(
                     Modifier.fillMaxWidth().padding(bottom = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    WebText("Settings", size = 30f, width = 58f, weight = 800)
+                    WebText("Settings", size = 34f, width = 58f, weight = 800)
                     TextButton(
                         onClick = onClose,
                         modifier = Modifier.semantics { contentDescription = "Back" },
@@ -163,7 +164,9 @@ fun SettingsScreen(state: WxState, model: WxViewModel, onClose: () -> Unit, onLo
                     TextButton(onClick = onLocate) { WebText("Refresh location", weight = 600) }
                 settings.places.forEachIndexed { index, place ->
                     FlowRow(
-                        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .6f), RoundedCornerShape(16.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
@@ -175,13 +178,13 @@ fun SettingsScreen(state: WxState, model: WxViewModel, onClose: () -> Unit, onLo
                                     .padding(top = 10.dp, end = 6.dp)
                                     .testTag("place_name_${place.id}"),
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                             TextButton(
                                 onClick = { movePlace(place.id, -1) },
                                 enabled = index > 0,
                                 contentPadding = PaddingValues(horizontal = 8.dp),
                                 modifier =
-                                    Modifier.widthIn(min = 36.dp)
+                                    Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                                         .testTag("move_up_${place.id}")
                                         .semantics { contentDescription = "Move up ${place.name}" },
                             ) {
@@ -192,7 +195,7 @@ fun SettingsScreen(state: WxState, model: WxViewModel, onClose: () -> Unit, onLo
                                 enabled = index < settings.places.lastIndex,
                                 contentPadding = PaddingValues(horizontal = 8.dp),
                                 modifier =
-                                    Modifier.widthIn(min = 36.dp)
+                                    Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                                         .testTag("move_down_${place.id}")
                                         .semantics {
                                             contentDescription = "Move down ${place.name}"
@@ -384,26 +387,27 @@ private fun SettingsChoiceRow(
     onSelect: (String) -> Unit,
 ) {
     FlowRow(
-        Modifier.fillMaxWidth().padding(vertical = 10.dp),
+        Modifier.fillMaxWidth().padding(vertical = 9.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        WebText(label, weight = 600, modifier = Modifier.padding(top = 8.dp, end = 12.dp))
-        Row(
+        WebText(label, weight = 500, modifier = Modifier.align(Alignment.CenterVertically).padding(end = 12.dp))
+        FlowRow(
             Modifier.selectableGroup()
-                .border(
-                    1.dp,
-                    MaterialTheme.colorScheme.onSurface.copy(alpha = .18f),
-                    RoundedCornerShape(6.dp),
-                )
-                .clip(RoundedCornerShape(6.dp))
+                .clip(RoundedCornerShape(24.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .padding(3.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             choices.forEach { (value, text) ->
                 val selected = value == selectedValue
                 Box(
-                    Modifier.background(
+                    Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(
                             if (selected) MaterialTheme.colorScheme.onSurface
-                            else MaterialTheme.colorScheme.surface
+                            else androidx.compose.ui.graphics.Color.Transparent
                         )
                         .clickable(role = Role.RadioButton, onClick = { onSelect(value) })
                         .semantics { this.selected = selected }
@@ -416,7 +420,7 @@ private fun SettingsChoiceRow(
                         weight = 600,
                         color =
                             if (selected) MaterialTheme.colorScheme.surface
-                            else MaterialTheme.colorScheme.onSurface,
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
@@ -451,7 +455,7 @@ fun AlertsScreen(
     Column(
         Modifier.fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(22.dp)
+            .padding(horizontal = 20.dp, vertical = 12.dp)
             .testTag("alerts_screen"),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -460,7 +464,7 @@ fun AlertsScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            WebText("Alerts", size = 30f, width = 58f, weight = 800)
+            WebText("Alerts", size = 34f, width = 58f, weight = 800)
             TextButton(
                 onClick = { showInfo = !showInfo },
                 modifier = Modifier.testTag("alerts_info"),
@@ -766,12 +770,17 @@ fun SwitchRow(
     tag: String = "",
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onChecked)
+            .testTag(tag)
+            .heightIn(min = 64.dp)
+            .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
+            WebText(title, size = 15f, weight = 600, color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1f else .45f))
             if (detail.isNotBlank())
                 Text(
                     detail,
@@ -781,13 +790,13 @@ fun SwitchRow(
         }
         Switch(
             checked = checked,
-            onCheckedChange = onChecked,
+            onCheckedChange = null,
             enabled = enabled,
-            modifier = Modifier.testTag(tag),
         )
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ValueSlider(
     title: String,
@@ -799,9 +808,13 @@ private fun ValueSlider(
 ) {
     var pending by remember(value) { mutableFloatStateOf(value.coerceIn(range)) }
     Column {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(title)
-            Text(label, style = MaterialTheme.typography.labelLarge)
+        FlowRow(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            WebText(title, weight = 500, modifier = Modifier.padding(end = 12.dp))
+            WebText(label, weight = 700, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Slider(
             value = pending,

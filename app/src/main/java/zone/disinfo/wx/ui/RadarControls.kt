@@ -4,8 +4,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -189,23 +190,28 @@ internal fun RadarScrubber(value: () -> Float, enabled: Boolean, onValue: (Float
         .semantics {
             contentDescription = "Radar frame time"
             progressBarRangeInfo = ProgressBarRangeInfo(value().coerceIn(0f, 1f), 0f..1f)
+            stateDescription = "${(value().coerceIn(0f, 1f) * 100).toInt()} percent"
             if (enabled) setProgress { currentOnValue(it.coerceIn(0f, 1f)); true }
             else disabled()
         }
         .pointerInput(enabled) {
-            detectTapGestures {
+            // One gesture owner handles the complete seek. Apply on press, not after an
+            // animation/native-map redraw can cancel the tap's up event. The same pointer
+            // remains captured through a drag; a release never hands the seek to the map.
+            awaitEachGesture {
+                val down = awaitFirstDown()
                 if (enabled) {
-                    val inset = 7.dp.toPx()
-                    currentOnValue(((it.x - inset) / (size.width - inset * 2).coerceAtLeast(1f)).coerceIn(0f, 1f))
-                }
-            }
-        }
-        .pointerInput(enabled) {
-            detectHorizontalDragGestures { change, _ ->
-                if (enabled) {
-                    change.consume()
-                    val inset = 7.dp.toPx()
-                    currentOnValue(((change.position.x - inset) / (size.width - inset * 2).coerceAtLeast(1f)).coerceIn(0f, 1f))
+                    fun seek(x: Float) {
+                        val inset = 7.dp.toPx()
+                        currentOnValue(((x - inset) / (size.width - inset * 2)
+                            .coerceAtLeast(1f)).coerceIn(0f, 1f))
+                    }
+                    down.consume()
+                    seek(down.position.x)
+                    drag(down.id) { change ->
+                        change.consume()
+                        seek(change.position.x)
+                    }
                 }
             }
         }) {

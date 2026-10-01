@@ -8,6 +8,8 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.*
@@ -35,6 +37,9 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
@@ -142,7 +147,6 @@ fun WebWeatherScreen(
     }
     val ink = MaterialTheme.colorScheme.onSurface
     val dark = MaterialTheme.colorScheme.surface.luminance() < .3f
-    val heroLineHeight = with(LocalDensity.current) { 239.2.sp.toDp() }
     val showSavedStatus =
         state.error != null ||
             state.cached && forecast != null && now - forecast.fetchedAt > 15 * 60_000
@@ -280,7 +284,21 @@ fun WebWeatherScreen(
                                     )
                                 )
                         }
-                    Box(Modifier.fillMaxWidth().heightIn(min = heroMinimum).background(brush)) {
+                    BoxWithConstraints(Modifier.fillMaxWidth().heightIn(min = heroMinimum).background(brush)) {
+                        val density = LocalDensity.current
+                        val temperatureText = degrees(temp, units)
+                        val textMeasurer = rememberTextMeasurer()
+                        val temperatureLayout = textMeasurer.measure(
+                            temperatureText,
+                            style = webTextStyle(260f, 52f, 820, 239.2f, -7.8f),
+                            softWrap = false,
+                            maxLines = 1,
+                        )
+                        val availableTemperatureWidth = with(density) { (maxWidth - 32.dp).toPx() }
+                        val heroScale = (availableTemperatureWidth / temperatureLayout.size.width.coerceAtLeast(1)).coerceAtMost(1f)
+                        val heroLineHeight = with(density) { (239.2f * heroScale).sp.toDp() }
+                        val stripHeight = with(density) { 39.2.sp.toDp() } + 18.dp
+                        val hourCellWidth = max(48f, 42f * density.fontScale).dp
                         Row(Modifier.fillMaxWidth().height(10.dp).align(Alignment.TopCenter)) {
                             rows.take(24).forEach { r ->
                                 Box(
@@ -299,7 +317,7 @@ fun WebWeatherScreen(
                         }
                         Column(
                             Modifier.fillMaxWidth()
-                                .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 78.dp)
+                                .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = stripHeight + 24.dp)
                         ) {
                             val label =
                                 if (selected != null)
@@ -310,20 +328,20 @@ fun WebWeatherScreen(
                                     } ?: if (temp != null) "Now · forecast · ${place.name}" else "Now · ${place.name}"
                             WebText(label, 14f, weight = 500)
                             WebText(
-                                degrees(temp, units),
-                                260f,
+                                temperatureText,
+                                260f * heroScale,
                                 52f,
                                 820,
                                 Modifier.padding(top = 6.dp)
-                                    .offset(x = (-10.4).dp)
+                                    .offset(x = (-10.4f * heroScale).dp)
                                     // CSS permits negative leading; Compose otherwise retains the
                                     // font's 269dp natural line box even with 239.2sp lineHeight.
                                     .height(heroLineHeight)
                                     .wrapContentHeight(Alignment.CenterVertically, unbounded = true)
                                     .testTag("hero_temperature"),
-                                lineHeight = 239.2f,
+                                lineHeight = 239.2f * heroScale,
                                 maxLines = 1,
-                                letterSpacing = -7.8f,
+                                letterSpacing = -7.8f * heroScale,
                             )
                             val headline = sourceHeadline(forecast, live, place, units, now)
                             if (headline.isNotBlank())
@@ -363,7 +381,8 @@ fun WebWeatherScreen(
                                     modifier = Modifier.padding(top = 8.dp),
                                 )
                         }
-                        Row(Modifier.fillMaxWidth().align(Alignment.BottomCenter)) {
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                            .heightIn(min = stripHeight).align(Alignment.BottomCenter)) {
                             rows
                                 .take(24)
                                 .filterIndexed { index, _ -> index % 2 == 0 }
@@ -374,7 +393,7 @@ fun WebWeatherScreen(
                                         } == true
                                     val color = if (active) MaterialTheme.colorScheme.surface else ink
                                     Column(
-                                        Modifier.weight(1f)
+                                        Modifier.width(hourCellWidth)
                                             .background(
                                                 if (active) ink
                                                 else if (index % 2 == 0) ink.copy(alpha = .05f)
@@ -384,6 +403,10 @@ fun WebWeatherScreen(
                                                 val time = if (index == 0) null else row.timeMillis
                                                 selectedTime = if (selectedTime == time) null else time
                                                 openDetail = null
+                                            }
+                                            .semantics(mergeDescendants = true) {
+                                                this.selected = active
+                                                contentDescription = "${units.hourText(row.timeMillis, zone)}, ${degrees(row.tempF, units)}"
                                             }
                                             .testTag("hour_strip_$index")
                                             .padding(start = 6.dp, top = 8.dp, bottom = 10.dp)
@@ -517,7 +540,9 @@ fun WebWeatherScreen(
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             WebText(sources, 12f, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            WebText("Radar map", 12f, modifier = Modifier.clickable { onOpenRadar() })
+                            TextButton(onClick = onOpenRadar, contentPadding = PaddingValues(horizontal = 14.dp)) {
+                                WebText("Radar map", 13f, weight = 600)
+                            }
                         }
                     }
                 }

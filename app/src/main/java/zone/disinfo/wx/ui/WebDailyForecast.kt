@@ -40,20 +40,12 @@ fun WebDailyForecast(
     nowMillis: Long = System.currentTimeMillis(),
 ) {
     val today = weatherDate(nowMillis, forecast.timeZone).toString()
-    val observed = forecast.observation?.tempF
-    val days =
-        remember(forecast, today) {
-            forecast.days.map { d ->
-                if (d.date == today && observed != null)
-                    d.copy(
-                        highF = max(d.highF ?: observed, observed),
-                        lowF = min(d.lowF ?: observed, observed),
-                    )
-                else d
-            }
-        }
-    val low = days.mapNotNull { it.lowF ?: it.highF }.minOrNull()?.minus(2) ?: return
-    val high = days.mapNotNull { it.highF }.maxOrNull()?.plus(2) ?: return
+    val outlook = remember(forecast, nowMillis) { dailyTemperatureForecasts(forecast, nowMillis) }
+    val days = outlook.map { it.day }
+    // Keep rows visible even when the source has no temperatures at all.
+    val values = days.flatMap { listOfNotNull(it.lowF, it.highF) }
+    val low = values.minOrNull()?.minus(2) ?: 0.0
+    val high = values.maxOrNull()?.plus(2) ?: 1.0
     val ink = MaterialTheme.colorScheme.onSurface
     val dark = MaterialTheme.colorScheme.surface.luminance() < .3f
     val wetColor = precipitationColor(PrecipKind.RAIN, dark)
@@ -107,7 +99,20 @@ fun WebDailyForecast(
             )
         }
     Column(modifier.fillMaxWidth().testTag("daily_forecast")) {
-        days.forEach { day ->
+        outlook.forEach { item ->
+            val day = item.day
+            val periodLabel = when (item.period) {
+                DailyTemperaturePeriod.REST_OF_DAY -> "Rest of day"
+                DailyTemperaturePeriod.PARTIAL_REST_OF_DAY -> "Partial day"
+                DailyTemperaturePeriod.FULL_DAY -> "Full day"
+            }
+            val temperatureDescription = when {
+                day.lowF == null && day.highF == null -> "Temperature forecast unavailable"
+                day.lowF == null -> "Low unavailable; high ${degrees(day.highF, units)}"
+                day.highF == null -> "Low ${degrees(day.lowF, units)}; high unavailable"
+                else -> "Low ${degrees(day.lowF, units)}; high ${degrees(day.highF, units)}"
+            }
+
             var expanded by rememberSaveable(day.date) { mutableStateOf(false) }
             val title =
                 if (day.date == today) "Today"
@@ -136,14 +141,16 @@ fun WebDailyForecast(
                     Modifier.fillMaxWidth().height(54.dp).testTag("day_header_${day.date}"),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    WebText(
-                        title,
-                        24f,
-                        58f,
-                        800,
-                        Modifier.width(60.dp).padding(start = 8.dp),
-                        maxLines = 1,
-                    )
+                    Column(Modifier.width(60.dp).padding(start = 8.dp)) {
+                        WebText(title, 24f, 58f, 800, maxLines = 1)
+                        if (day.date == today)
+                            WebText(
+                                periodLabel, 9f, 80f, 500,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                modifier = Modifier.testTag("day_period_${day.date}"),
+                            )
+                    }
                     Box(Modifier.width(30.dp)) {
                         if (icon.isNotBlank()) SourceWeatherGlyph(icon, Modifier.size(24.dp), dark)
                     }
@@ -153,7 +160,7 @@ fun WebDailyForecast(
                             .testTag("day_temperature_${day.date}")
                             .semantics {
                                 contentDescription =
-                                    "${degrees(day.lowF,units)} to ${degrees(day.highF,units)}"
+                                    "$periodLabel. $temperatureDescription"
                             }
                     ) {
                         val d = density
@@ -161,8 +168,8 @@ fun WebDailyForecast(
                         val plot = (size.width - leftGutter - rightGutter).coerceAtLeast(1f)
                         fun x(value: Double) =
                             leftGutter + ((value - low) / (high - low) * plot).toFloat()
-                        if (day.highF != null) {
-                            val a = day.lowF ?: day.highF
+                        if (day.highF != null && day.lowF != null && day.highF >= day.lowF) {
+                            val a = day.lowF
                             // A very small range still has a visible bar and two separate labels.
                             val x1 = max(x(a) + 6 * d, x(day.highF)).coerceAtMost(leftGutter + plot)
                             val x0 = min(x(a), x1 - 6 * d)
@@ -196,10 +203,20 @@ fun WebDailyForecast(
                                     p,
                                 )
                             }
-                            day.lowF?.let {
-                                number(it, x0 - 5 * d, lowPaint)
-                            }
+                            number(day.lowF, x0 - 5 * d, lowPaint)
                             number(day.highF, x1 + 5 * d, highPaint)
+                        } else {
+                            // A missing high must not hide a known low, and one value must
+                            // never paint a false zero-width range. Keep missing data visible.
+                            val label = if (day.lowF == null && day.highF == null) "Temp unavailable"
+                                else "L ${degrees(day.lowF, units)}   H ${degrees(day.highF, units)}"
+                            val p = Paint(lowPaint).apply {
+                                textAlign = Paint.Align.CENTER
+                                textSize = 12 * d
+                            }
+                            val maxWidth = (size.width - 8 * d).coerceAtLeast(1f)
+                            if (p.measureText(label) > maxWidth) p.textSize *= maxWidth / p.measureText(label)
+                            c.drawText(label, size.width / 2, size.height / 2 - (p.ascent() + p.descent()) / 2, p)
                         }
                     }
                     Canvas(
@@ -236,22 +253,17 @@ fun WebDailyForecast(
                             .padding(start = 12.dp, end = 12.dp, bottom = 14.dp)
                             .testTag("day_detail_${day.date}")
                     ) {
-                        val rows =
-                            forecast.hours.filter {
-                                weatherDate(it.timeMillis, forecast.timeZone).toString() ==
-                                    day.date &&
-                                    (day.date != today || it.timeMillis + WX_HOUR > nowMillis)
+                        val rows = item.hours
+                        val complete = item.completeHours
+                        if (day.date == today) {
+                            val explanation = when (item.period) {
+                                DailyTemperaturePeriod.REST_OF_DAY -> "Temperature outlook from this hour to midnight"
+                                DailyTemperaturePeriod.PARTIAL_REST_OF_DAY -> "Partial hourly outlook; some remaining temperatures are unavailable"
+                                DailyTemperaturePeriod.FULL_DAY -> "Full-day forecast; remaining hourly temperatures are unavailable"
                             }
-                        val complete =
-                            rows.isNotEmpty() &&
-                                (day.date == today ||
-                                    weatherDate(
-                                            rows.first().timeMillis - WX_HOUR,
-                                            forecast.timeZone,
-                                        )
-                                        .toString() != day.date) &&
-                                weatherDate(rows.last().timeMillis + WX_HOUR, forecast.timeZone)
-                                    .toString() != day.date
+                            WebText(explanation, 12f, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(bottom = 8.dp))
+                        }
                         if (complete) HourlyDayRibbon(rows, units, forecast.timeZone)
                         else
                             FlowRow(
