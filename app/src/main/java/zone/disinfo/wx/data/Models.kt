@@ -69,6 +69,8 @@ data class Forecast(
     val sourceRun: String? = null,
     val station: ForecastStation? = null,
     val dailySourceRun: String? = null,
+    /** Actual source cadence, retained for honest local-day coverage checks. */
+    val hourlyStepMillis: Long = 3_600_000L,
 )
 
 /** Current-hour fallback only; a fresh download does not make an expired forecast current. */

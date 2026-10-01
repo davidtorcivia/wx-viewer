@@ -88,6 +88,7 @@ object WeatherParser {
             sourceRun = hourly?.string("run"),
             station = station,
             dailySourceRun = root.string("daily_run"),
+            hourlyStepMillis = hourly?.number("step")?.times(1000)?.toLong() ?: 3_600_000L,
         )
     }
 
