@@ -146,6 +146,19 @@ fun WebWeatherScreen(
     val showSavedStatus =
         state.error != null ||
             state.cached && forecast != null && now - forecast.fetchedAt > 15 * 60_000
+    var previouslyShowingSavedStatus by remember(place.id) { mutableStateOf(showSavedStatus) }
+    LaunchedEffect(place.id, showSavedStatus) {
+        if (showSavedStatus && !previouslyShowingSavedStatus) {
+            // LazyColumn preserves the hero's key when a status row is prepended. At the
+            // top, reveal the new error/retry row instead of leaving it just off-screen.
+            // Do not pull someone away from a chart they scrolled to during the request.
+            val firstVisible = listState.layoutInfo.visibleItemsInfo.firstOrNull()
+            if (firstVisible?.key == "hero" && listState.firstVisibleItemScrollOffset == 0) {
+                listState.scrollToItem(0)
+            }
+        }
+        previouslyShowingSavedStatus = showSavedStatus
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val heroMinimum = maxHeight
         WeatherRefreshBox(
