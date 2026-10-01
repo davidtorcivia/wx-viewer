@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class, androidx.compose.ui.ExperimentalComposeUiApi::class)
 
 package zone.disinfo.wx.ui
 
@@ -8,13 +8,17 @@ import android.content.res.Configuration
 import android.os.Bundle
 import android.util.Log
 import androidx.compose.foundation.*
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.MyLocation
+import androidx.compose.material.icons.rounded.OpenInFull
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,6 +31,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -207,6 +212,7 @@ internal class RadarSession(context: Context, val key: String, place: Place) {
         )
     var inspection by mutableStateOf<RadarInspection?>(null)
     var scale by mutableStateOf("")
+    var scaleWidth by mutableFloatStateOf(72f)
     var timeZone = ZoneId.systemDefault().id
 
     fun save() {
@@ -304,11 +310,12 @@ private fun RadarView(
             RadarSessions.get(context, serverUrl, place)
         }
     SideEffect { session.timeZone = timeZone }
-    var refresh by remember { mutableIntStateOf(0) }
-    var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var mapError by remember { mutableStateOf<String?>(null) }
-    var tileLoading by remember { mutableStateOf(false) }
+    var refresh by remember(session) { mutableIntStateOf(0) }
+    var loading by remember(session) { mutableStateOf(false) }
+    var error by remember(session) { mutableStateOf<String?>(null) }
+    var mapError by remember(session) { mutableStateOf<String?>(null) }
+    var tileLoading by remember(session) { mutableStateOf(false) }
+    var frameWaiting by remember(session) { mutableStateOf(false) }
     var controller by remember(session) { mutableStateOf<NativeRadarController?>(null) }
     val network by
         remember(context) { NetworkConnectivity.observe(context) }
@@ -318,11 +325,11 @@ private fun RadarView(
         val offline = network == NetworkAvailability.OFFLINE
         if (offline) {
             session.liveReady = false
-            session.playing = false
             session.inspection = null
             if (session.savedView != null) session.showingSavedView = true
         } else if (wasOffline) {
             // Restart both metadata and a style request that may have failed underground.
+            session.showingSavedView = false
             refresh++
             mapError = null
         }
@@ -334,7 +341,7 @@ private fun RadarView(
     }
     var linkPending by
         remember(initialLayer, initialTimeSeconds) { mutableStateOf(initialTimeSeconds) }
-    DisposableEffect(lifecycle) {
+    DisposableEffect(lifecycle, session) {
         val observer = LifecycleEventObserver { _, _ ->
             resumed = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
         }
@@ -344,7 +351,7 @@ private fun RadarView(
             session.save()
         }
     }
-    LaunchedEffect(initialLayer, initialTimeSeconds) {
+    LaunchedEffect(session, initialLayer, initialTimeSeconds) {
         if (initialLayer != null && initialLayer in radarOverlays) {
             if (session.overlay != initialLayer) {
                 session.frames = RadarFrames(emptyList())
@@ -370,10 +377,9 @@ private fun RadarView(
         val snapshot = RadarViewCache.read(session.key, session.overlay, session.effectiveRange)
         if (generation != DisplayCache.generation) return@LaunchedEffect
         session.savedView = snapshot
-        if (snapshot != null && !session.liveReady) {
+        if (snapshot != null && !session.liveReady && !DisplayCache.isOnline()) {
             session.showingSavedView = true
             session.inspection = null
-            session.playing = false
             session.time = snapshot.frameTime.toDouble()
         }
         if (session.frames.frames.isEmpty()) {
@@ -389,7 +395,6 @@ private fun RadarView(
                     session.frames = cached
                     if (session.time == 0.0)
                         session.time = cached.frames.lastOrNull()?.time?.toDouble() ?: 0.0
-                    session.playing = false
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -398,7 +403,7 @@ private fun RadarView(
             }
         }
     }
-    LaunchedEffect(serverUrl, session.overlay, session.effectiveRange, refresh, resumed) {
+    LaunchedEffect(session, serverUrl, session.overlay, session.effectiveRange, refresh, resumed) {
         if (!resumed) return@LaunchedEffect
         val which = session.overlay
         val range = session.effectiveRange
@@ -410,6 +415,7 @@ private fun RadarView(
                     throw IOException("${radarOverlays[which]} unavailable")
                 val old = session.time
                 session.frames = result
+                session.showingSavedView = false
                 val requested = linkPending
                 val newest =
                     result.frames
@@ -432,10 +438,9 @@ private fun RadarView(
             } catch (e: Exception) {
                 if (Log.isLoggable(RADAR_LOG_TAG, Log.DEBUG))
                     Log.d(RADAR_LOG_TAG, "Frame request failed", e)
-                if (session.savedView != null) {
+                if (session.savedView != null && (!DisplayCache.isOnline() || !session.liveReady)) {
                     session.showingSavedView = true
                     session.inspection = null
-                    session.playing = false
                 }
                 error =
                     if (session.savedView != null) null
@@ -449,14 +454,16 @@ private fun RadarView(
         }
     }
     LaunchedEffect(
+        session,
         session.playing,
         session.frames,
+        network,
         resumed,
         session.speed,
         session.showingSavedView,
     ) {
         val frames = session.frames.frames
-        if (!session.playing || !resumed || frames.size < 2 || session.showingSavedView)
+        if (!session.playing || !resumed || frames.size < 2 || session.showingSavedView || network == NetworkAvailability.OFFLINE)
             return@LaunchedEffect
         val mult = listOf(1.0, .5, .25)[session.speed]
         val observedMrms =
@@ -486,7 +493,7 @@ private fun RadarView(
                 } else if (session.time >= end) {
                     holdUntil = now + 1_500_000_000
                     wrap = true
-                } else if (!tileLoading) {
+                } else if (!frameWaiting) {
                     val next = session.time + dt * 7200 / 9000 * mult
                     if (session.time < newest && next >= newest) {
                         session.time = newest
@@ -500,7 +507,7 @@ private fun RadarView(
                 val index = frames.indexOfLast { it.time <= session.time }.coerceAtLeast(0)
                 delay((500 / mult).toLong() + if (index == frames.lastIndex) 1500 else 0)
                 var waited = 0
-                while (tileLoading && waited < 5000) {
+                while (frameWaiting && waited < 5000) {
                     delay(100)
                     waited += 100
                 }
@@ -536,11 +543,11 @@ private fun RadarView(
     val ink = MaterialTheme.colorScheme.onSurface
     val paper = MaterialTheme.colorScheme.surface
     val density = LocalDensity.current
+    var transportHeight by remember(compact) { mutableStateOf(if (compact) 48.dp else 113.dp) }
     fun changeOverlay(layer: String) {
         session.overlay = layer
         session.frames = RadarFrames(emptyList())
         session.time = 0.0
-        session.playing = true
         session.inspection = null
         session.save()
     }
@@ -552,7 +559,7 @@ private fun RadarView(
         session.range = next
         session.frames = RadarFrames(emptyList())
         session.time = 0.0
-        session.playing = true
+        session.inspection = null
         session.save()
     }
     fun scrub(fraction: Float) {
@@ -565,7 +572,7 @@ private fun RadarView(
             session.time = a.time + (position - i) * (b.time - a.time).toDouble()
         }
     }
-    BoxWithConstraints(if (compact) modifier else modifier.fillMaxSize().testTag("radar_field")) {
+    BoxWithConstraints(if (compact) modifier else modifier.fillMaxSize().testTag("radar_field").semantics { testTagsAsResourceId = true }) {
         val viewportWidth = maxWidth
         NativeRadarMap(
             serverUrl,
@@ -576,6 +583,7 @@ private fun RadarView(
             compact,
             refresh,
             { tileLoading = it },
+            { frameWaiting = it },
             { mapError = it },
             { controller = it },
             Modifier.fillMaxSize(),
@@ -600,7 +608,7 @@ private fun RadarView(
                         modifier =
                             Modifier.align(Alignment.TopCenter)
                                 .padding(8.dp)
-                                .background(paper, RoundedCornerShape(8.dp))
+                                .background(paper.copy(alpha = .91f), RoundedCornerShape(8.dp))
                                 .padding(8.dp, 5.dp)
                                 .testTag("radar_saved_timestamp"),
                     )
@@ -613,7 +621,7 @@ private fun RadarView(
                     modifier =
                         Modifier.align(Alignment.TopCenter)
                             .padding(8.dp)
-                            .background(paper, RoundedCornerShape(8.dp))
+                            .background(paper.copy(alpha = .91f), RoundedCornerShape(8.dp))
                             .padding(8.dp, 5.dp),
                 )
             }
@@ -635,28 +643,16 @@ private fun RadarView(
                             session,
                             false,
                             { changeOverlay(it) },
-                            (if (session.legendOpen) Modifier.width(224.dp)
-                                else Modifier.wrapContentWidth())
+                            (if (session.legendOpen) Modifier.width(224.dp) else Modifier.wrapContentWidth())
                                 .testTag("radar_legend"),
                         )
                     }
-                    Column(
-                        Modifier.clip(RoundedCornerShape(20.dp))
-                            .background(paper)
-                            .testTag("radar_map_controls")
-                    ) {
-                        RadarIcon(
-                            "+",
-                            "Zoom in",
-                            onClick = { if (!session.showingSavedView) controller?.zoom(1.0) },
-                        )
-                        RadarIcon(
-                            "−",
-                            "Zoom out",
-                            onClick = { if (!session.showingSavedView) controller?.zoom(-1.0) },
-                        )
-                        RadarIcon("⌖", "Find my location", onLocate)
-                    }
+                    RadarIcon(
+                        Icons.Rounded.MyLocation,
+                        "Find my location",
+                        onLocate,
+                        Modifier.radarSurface(CircleShape).testTag("radar_map_controls"),
+                    )
                 }
                 val saved = session.savedView?.takeIf { session.showingSavedView }
                 val savedAt = session.frames.savedAt
@@ -680,7 +676,7 @@ private fun RadarView(
                         status,
                         fontSize = 12.sp,
                         modifier =
-                            Modifier.background(paper, RoundedCornerShape(8.dp))
+                            Modifier.background(paper.copy(alpha = .91f), RoundedCornerShape(8.dp))
                                 .padding(8.dp, 5.dp)
                                 .testTag("radar_saved_timestamp"),
                     )
@@ -688,13 +684,13 @@ private fun RadarView(
         }
         if (compact)
             RadarIcon(
-                "⛶",
+                Icons.Rounded.OpenInFull,
                 "Open the radar full screen",
                 onExpand,
                 Modifier.align(Alignment.TopEnd)
                     .padding(8.dp)
-                    .background(ink.copy(alpha = .78f), CircleShape),
-                paper,
+                    .radarSurface(CircleShape),
+                ink,
             )
         if (compact)
             RadarLegend(
@@ -702,145 +698,47 @@ private fun RadarView(
                 true,
                 { changeOverlay(it) },
                 Modifier.align(Alignment.BottomCenter)
-                    .padding(start = 8.dp, end = 8.dp, bottom = 56.dp)
+                    .padding(start = 8.dp, end = 8.dp, bottom = transportHeight + 16.dp)
                     .fillMaxWidth(),
             )
-        Row(
-            Modifier.align(Alignment.BottomCenter)
-                .padding(if (compact) 8.dp else 12.dp)
-                .fillMaxWidth()
-                .clip(CircleShape)
-                .background(paper)
-                .padding(
-                    start = if (compact) 4.dp else 6.dp,
-                    end = 14.dp,
-                    top = if (compact) 4.dp else 6.dp,
-                    bottom = if (compact) 4.dp else 6.dp,
-                ),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 6.dp),
-        ) {
-            RadarIcon(
-                if (session.playing) "Ⅱ" else "▶",
-                if (session.playing) "Pause animation" else "Play animation",
-                { if (!session.showingSavedView) session.playing = !session.playing },
-                Modifier.size(if (compact) 32.dp else 44.dp).background(ink, CircleShape),
-                paper,
-            )
-            if (!compact)
-                RadarSmallButton(listOf("1x", "½x", "¼x")[session.speed], "Animation speed") {
-                    session.speed = (session.speed + 1) % 3
-                    session.save()
-                }
-            if (!compact)
-                RadarSmallButton(
-                    radarRanges.first { it.first == session.effectiveRange }.second,
-                    "Time range",
-                    onClick = ::nextRange,
-                )
-            val stamp =
-                session.savedView
-                    ?.takeIf { session.showingSavedView }
-                    ?.let { radarClock(it.frameTime, timeZone, true) }
-                    ?: frame?.let { radarClock(it.time, timeZone, it.field != null) }
-                    ?: if (loading) "Loading…" else "Unavailable"
-            val badge =
-                if (session.showingSavedView)
-                    session.savedView
-                        ?.let {
-                            if (it.leadMinutes > 0) "SAVED FORECAST +${it.leadMinutes} min"
-                            else "SAVED"
-                        }
-                        .orEmpty()
-                else
-                    frame
-                        ?.let {
-                            when {
-                                it.leadMinutes > 0 -> "FORECAST +${it.leadMinutes} min"
-                                it.field != null ->
-                                    if (it.source == "rtma") "OBSERVED" else "+${it.forecastHour}h"
-                                else -> ""
-                            }
-                        }
-                        .orEmpty()
-            @Composable
-            fun badgeText() {
-                if (badge.isNotEmpty() && (!compact || viewportWidth > 400.dp))
-                    Text(
-                        badge,
-                        fontSize = if (compact) 9.sp else 11.sp,
-                        color =
-                            if (frame != null && frame.time > Instant.now().epochSecond) paper
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier =
-                            Modifier.background(
-                                    if (frame != null && frame.time > Instant.now().epochSecond) ink
-                                    else Color.Transparent,
-                                    CircleShape,
-                                )
-                                .padding(horizontal = 5.dp, vertical = 2.dp),
-                    )
-            }
-            if (compact)
-                Row(
-                    Modifier.weight(1f).padding(horizontal = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Box(Modifier.weight(1f)) {
-                        RadarScrubber(
-                            sliderFraction,
-                            frames.size > 1 && !session.showingSavedView,
-                            ::scrub,
-                        )
-                    }
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(stamp, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                        badgeText()
-                    }
-                }
-            else
-                Column(Modifier.weight(1f)) {
-                    RadarScrubber(
-                        sliderFraction,
-                        frames.size > 1 && !session.showingSavedView,
-                        ::scrub,
-                    )
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            stamp,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            modifier = Modifier.weight(1f),
-                        )
-                        badgeText()
-                    }
-                }
-            if (compact)
-                RadarSmallButton(
-                    radarRanges.first { it.first == session.effectiveRange }.second,
-                    "Time range",
-                    compact = true,
-                    onClick = ::nextRange,
-                )
+        val stamp = session.savedView?.takeIf { session.showingSavedView }
+            ?.let { radarClock(it.frameTime, timeZone, true) }
+            ?: frame?.let { radarClock(it.time, timeZone, it.field != null) }
+            ?: if (loading) "Loading…" else "Unavailable"
+        val badge = when {
+            session.showingSavedView -> "SAVED"
+            frame == null -> ""
+            frame.leadMinutes > 0 -> "FORECAST +${frame.leadMinutes}m"
+            frame.field != null -> if (frame.source == "rtma") "OBSERVED" else "+${frame.forecastHour}h"
+            else -> "OBSERVED"
         }
-
+        RadarTransport(
+            playing = session.playing,
+            enabled = frames.size > 1 && !session.showingSavedView && network != NetworkAvailability.OFFLINE,
+            compact = compact,
+            stamp = stamp,
+            badge = badge,
+            loading = tileLoading && !session.showingSavedView,
+            speed = listOf("1×", "½×", "¼×")[session.speed],
+            range = radarRanges.first { it.first == session.effectiveRange }.second,
+            fraction = sliderFraction,
+            onPlay = { session.playing = !session.playing },
+            onSpeed = { session.speed = (session.speed + 1) % 3; session.save() },
+            onRange = ::nextRange,
+            onScrub = ::scrub,
+            modifier = Modifier.align(Alignment.BottomCenter)
+                .padding(if (compact) 8.dp else 12.dp).fillMaxWidth()
+                .onSizeChanged { size ->
+                    transportHeight = with(density) { size.height.toDp() }
+                    if (!compact) controller?.setControlInset(size.height + (20 * density.density).roundToInt())
+                },
+        )
         if (!compact && session.scale.isNotBlank())
-            Text(
-                session.scale,
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier =
-                    Modifier.align(Alignment.BottomEnd)
-                        .padding(end = 12.dp, bottom = 78.dp)
-                        .background(paper, RoundedCornerShape(6.dp))
-                        .padding(8.dp, 2.dp),
+            RadarDistanceScale(
+                session.scale, session.scaleWidth,
+                Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = transportHeight + 24.dp),
             )
+
         val inspection = session.inspection
         if (inspection != null) {
             val x =
@@ -865,22 +763,15 @@ private fun RadarView(
         (if (session.showingSavedView) null else mapError ?: error)?.let { problem ->
             Row(
                 Modifier.align(Alignment.Center)
-                    .background(paper, RoundedCornerShape(10.dp))
+                    .background(paper.copy(alpha = .94f), RoundedCornerShape(14.dp))
                     .padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(problem, fontSize = 12.sp, modifier = Modifier.weight(1f, false))
-                Text(
-                    "Retry",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier =
-                        Modifier.clickable {
-                                refresh++
-                                mapError = null
-                            }
-                            .padding(start = 12.dp),
-                )
+                TextButton(onClick = { refresh++; mapError = null },
+                    modifier = Modifier.heightIn(min = 44.dp)) {
+                    Text("Retry", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
             }
         }
     }
@@ -897,8 +788,7 @@ internal fun RadarInspectionPopup(
     Column(
         modifier
             .width(260.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(paper)
+            .radarSurface(RoundedCornerShape(18.dp))
             .padding(12.dp, 10.dp)
             .testTag("radar_inspection")
     ) {
@@ -938,80 +828,6 @@ internal fun RadarInspectionPopup(
 }
 
 @Composable
-private fun RadarIcon(
-    label: String,
-    description: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    color: Color = MaterialTheme.colorScheme.onSurface,
-) {
-    Box(
-        modifier.size(40.dp).clip(CircleShape).clickable(onClick = onClick).semantics {
-            contentDescription = description
-        },
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(label, fontSize = 21.sp, color = color)
-    }
-}
-
-@Composable
-private fun RadarSmallButton(
-    label: String,
-    description: String,
-    compact: Boolean = false,
-    onClick: () -> Unit,
-) {
-    Text(
-        label,
-        fontSize = if (compact) 14.sp else 16.sp,
-        fontWeight = FontWeight.Bold,
-        modifier =
-            Modifier.height(if (compact) 32.dp else 44.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = .06f))
-                .clickable(onClick = onClick)
-                .padding(
-                    horizontal = if (compact) 10.dp else 12.dp,
-                    vertical = if (compact) 7.dp else 12.dp,
-                )
-                .semantics { contentDescription = description },
-    )
-}
-
-@Composable
-private fun RadarScrubber(value: () -> Float, enabled: Boolean, onValue: (Float) -> Unit) {
-    val ink = MaterialTheme.colorScheme.onSurface
-    val paper = MaterialTheme.colorScheme.surface
-    val currentOnValue by rememberUpdatedState(onValue)
-    Canvas(
-        Modifier.fillMaxWidth()
-            .height(20.dp)
-            .testTag("radar_scrubber")
-            .semantics { contentDescription = "Radar frame time" }
-            .pointerInput(enabled) {
-                detectTapGestures {
-                    if (enabled) currentOnValue((it.x / size.width).coerceIn(0f, 1f))
-                }
-            }
-            .pointerInput(enabled) {
-                detectHorizontalDragGestures { change, _ ->
-                    if (enabled) {
-                        change.consume()
-                        currentOnValue((change.position.x / size.width).coerceIn(0f, 1f))
-                    }
-                }
-            }
-    ) {
-        val y = size.height / 2
-        drawLine(ink.copy(alpha = .18f), Offset(0f, y), Offset(size.width, y), 2.dp.toPx())
-        val x = 5.dp.toPx() + value() * (size.width - 10.dp.toPx())
-        drawCircle(paper, 8.dp.toPx(), Offset(x, y))
-        drawCircle(ink, 5.dp.toPx(), Offset(x, y))
-    }
-}
-
-@Composable
 private fun RadarLegend(
     session: RadarSession,
     compact: Boolean,
@@ -1022,97 +838,52 @@ private fun RadarLegend(
     val paper = MaterialTheme.colorScheme.surface
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val field = session.frames.legend
-    Column(
-        modifier
-            .clip(RoundedCornerShape(if (compact || !session.legendOpen) 50.dp else 10.dp))
-            .background(paper)
-            .padding(if (compact) 4.dp else if (session.legendOpen) 12.dp else 0.dp)
-    ) {
-        if (!compact && !session.legendOpen)
-            Text(
-                "${radarOverlays[session.overlay]} ▾",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier =
-                    Modifier.clickable {
-                            session.legendOpen = true
-                            session.save()
-                        }
-                        .padding(16.dp, 11.dp)
-                        .testTag("radar_legend_expand")
-                        .semantics { contentDescription = "Expand radar legend" },
-            )
-        else {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Box {
-                    Text(
-                        "${radarOverlays[session.overlay]} ▾",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier =
-                            Modifier.clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = .06f))
-                                .clickable { menu = true }
-                                .padding(horizontal = 11.dp, vertical = 8.dp)
-                                .testTag("radar_overlay"),
-                    )
-                    DropdownMenu(menu, { menu = false }) {
-                        radarOverlays.forEach { (key, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = {
-                                    menu = false
-                                    onOverlay(key)
-                                },
-                            )
-                        }
+    Column(modifier.radarSurface(RoundedCornerShape(if (compact || !session.legendOpen) 24.dp else 18.dp))
+        .padding(horizontal = if (compact) 5.dp else 10.dp, vertical = if (compact) 2.dp else 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(if (compact || !session.legendOpen) Modifier else Modifier.weight(1f)) {
+                Row(Modifier.heightIn(min = 44.dp).clip(CircleShape)
+                    .clickable(role = Role.Button) { menu = true }
+                    .padding(horizontal = 5.dp).testTag("radar_overlay")
+                    .semantics { contentDescription = "Choose radar layer" },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(radarOverlays[session.overlay].orEmpty(), fontSize = if (compact) 12.sp else 13.sp,
+                        fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    Icon(Icons.Rounded.KeyboardArrowDown, null, Modifier.size(16.dp), tint = muted)
+                }
+                DropdownMenu(menu, { menu = false }, containerColor = paper.copy(alpha = .97f),
+                    shape = RoundedCornerShape(18.dp)) {
+                    radarOverlays.forEach { (key, label) ->
+                        DropdownMenuItem(text = { Text(label, fontSize = 14.sp,
+                            fontWeight = if (session.overlay == key) FontWeight.SemiBold else FontWeight.Normal) },
+                            onClick = { menu = false; if (session.overlay != key) onOverlay(key) })
                     }
                 }
-                if (compact)
-                    Box(Modifier.weight(1f).padding(end = 10.dp)) {
-                        RadarScale(field, session.overlay, false, true)
-                    }
-                else
-                    Text(
-                        "⌃",
-                        fontSize = 16.sp,
-                        modifier =
-                            Modifier.clickable {
-                                    session.legendOpen = false
-                                    session.save()
-                                }
-                                .padding(6.dp)
-                                .testTag("radar_legend_collapse")
-                                .semantics { contentDescription = "Collapse radar legend" },
-                    )
             }
-            if (!compact) {
-                Spacer(Modifier.height(8.dp))
-                RadarScale(
-                    field,
-                    session.overlay,
-                    session.frames.snow || session.frames.frames.firstOrNull()?.source != "mrms",
-                    false,
+            if (compact) Box(Modifier.weight(1f).padding(start = 4.dp, end = 8.dp)) {
+                RadarScale(field, session.overlay, false, true)
+            } else {
+                RadarIcon(
+                    if (session.legendOpen) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
+                    if (session.legendOpen) "Collapse radar legend" else "Expand radar legend",
+                    { session.legendOpen = !session.legendOpen; session.save() },
+                    Modifier.size(44.dp).testTag(if (session.legendOpen) "radar_legend_collapse" else "radar_legend_expand"),
+                    muted,
                 )
-                val caption =
-                    when {
-                        field != null ->
-                            "${field.label}, ${if(session.effectiveRange=="now")"observed (RTMA 2.5 km analysis)"else"RRFS 3 km model"}"
-                        session.overlay == "satellite" ->
-                            "Satellite: brighter = thicker, colder cloud tops"
-                        else -> "Inches per hour (approx.)"
-                    }
-                Text(
-                    caption,
-                    fontSize = 10.sp,
-                    color = muted,
-                    modifier = Modifier.padding(top = 5.dp),
-                )
-                if (session.effectiveRange != "now" && field == null)
-                    Text("Simulated by the RRFS 3 km model", fontSize = 10.sp, color = muted)
+            }
+        }
+        if (!compact && session.legendOpen) {
+            Column(Modifier.padding(horizontal = 5.dp).padding(top = 3.dp, bottom = 9.dp)) {
+                RadarScale(field, session.overlay,
+                    session.frames.snow || session.frames.frames.firstOrNull()?.source != "mrms", false)
+                val caption = when {
+                    field != null -> if (session.effectiveRange == "now") "Observed · RTMA 2.5 km" else "Forecast · RRFS 3 km"
+                    session.overlay == "satellite" -> "Brighter = colder cloud tops"
+                    session.effectiveRange != "now" -> "in/hr · RRFS simulated"
+                    else -> "in/hr · approximate"
+                }
+                Text(caption, fontSize = 9.sp, color = muted, modifier = Modifier.padding(top = 5.dp))
             }
         }
     }
@@ -1179,7 +950,7 @@ private fun RadarScale(legend: RadarFieldLegend?, overlay: String, snow: Boolean
                 Column(Modifier.weight(1f)) {
                     Canvas(
                         Modifier.fillMaxWidth()
-                            .height(if (compact) 5.dp else 8.dp)
+                            .height(if (compact) 4.dp else 6.dp)
                             .clip(CircleShape)
                     ) {
                         if (field == null) {
@@ -1203,18 +974,8 @@ private fun RadarScale(legend: RadarFieldLegend?, overlay: String, snow: Boolean
                             )
                         }
                     }
-                    BoxWithConstraints(
-                        Modifier.fillMaxWidth().height(if (compact) 12.dp else 16.dp)
-                    ) {
-                        ticks.forEach { (f, text) ->
-                            Text(
-                                text,
-                                fontSize = if (compact) 9.sp else 10.sp,
-                                color = muted,
-                                modifier = Modifier.offset((maxWidth.value * f - 6).dp, 0.dp),
-                            )
-                        }
-                    }
+                    RadarLegendTicks(ticks, compact)
+
                 }
             }
         }
@@ -1404,6 +1165,7 @@ private fun NativeRadarMap(
     compact: Boolean,
     retry: Int,
     onLoading: (Boolean) -> Unit,
+    onWaiting: (Boolean) -> Unit,
     onError: (String?) -> Unit,
     onController: (NativeRadarController) -> Unit,
     modifier: Modifier = Modifier,
@@ -1411,6 +1173,7 @@ private fun NativeRadarMap(
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val loadingCallback by rememberUpdatedState(onLoading)
+    val waitingCallback by rememberUpdatedState(onWaiting)
     val errorCallback by rememberUpdatedState(onError)
     val light = MaterialTheme.colorScheme.surface.luminance() > 0.5f
     val mapView =
@@ -1427,6 +1190,7 @@ private fun NativeRadarMap(
                 compact,
                 light,
                 { loadingCallback(it) },
+                { waitingCallback(it) },
                 { errorCallback(it) },
             )
         }
@@ -1459,10 +1223,12 @@ private fun NativeRadarMap(
                     Lifecycle.Event.ON_RESUME ->
                         if (!resumed) {
                             mapView.onResume()
+                            controller.setResumed(true)
                             resumed = true
                         }
                     Lifecycle.Event.ON_PAUSE ->
                         if (resumed) {
+                            controller.setResumed(false)
                             mapView.onPause()
                             resumed = false
                         }
@@ -1496,11 +1262,12 @@ private fun NativeRadarMap(
             destroy()
         }
     }
-    LaunchedEffect(light, retry) { controller.loadStyle(light, retry) }
+    LaunchedEffect(controller, light, retry) { controller.loadStyle(light, retry) }
     LaunchedEffect(controller) { onController(controller) }
-    LaunchedEffect(serverUrl, frame, backdrop) {
+    LaunchedEffect(controller, serverUrl, frame, backdrop) {
         controller.show(normalizeServerUrl(serverUrl), frame, backdrop)
     }
+    key(mapView) {
     AndroidView(
         factory = {
             android.widget.FrameLayout(context).apply {
@@ -1515,6 +1282,7 @@ private fun NativeRadarMap(
                 contentDescription = "Interactive weather map centered near ${place.name}"
             },
     )
+    }
 }
 
 private class NativeRadarController(
@@ -1522,12 +1290,20 @@ private class NativeRadarController(
     private val session: RadarSession,
     private val compact: Boolean,
     light: Boolean,
-    private val loading: (Boolean) -> Unit,
+    private val buffering: (Boolean) -> Unit,
+    private val waiting: (Boolean) -> Unit,
     private val error: (String?) -> Unit,
 ) {
     private var map: MapLibreMap? = null
     private var style: Style? = null
     private var disposed = false
+    private var resumed = false
+    private var controlInset = (133 * view.resources.displayMetrics.density).roundToInt()
+    private var rasterWaitJob: Job? = null
+    private var styleWaitJob: Job? = null
+    private var frameRequest = 0
+    private var acceptRenderedFrame = false
+    private fun loading(value: Boolean) { buffering(value); waiting(value) }
     private var styleUrl =
         "https://tiles.openfreemap.org/styles/${if (light) "positron" else "dark"}"
     private var requestedStyleUrl: String? = null
@@ -1544,12 +1320,20 @@ private class NativeRadarController(
     private var nowcastJob: Job? = null
     private var nowcastBusy = false
     private var nowcastRequest = 0
+    private var nowcastWorkKey: String? = null
     private var nowcastCrop: RadarCrop? = null
     private var lastNowcastImage: Pair<String, RadarNowcastImage>? = null
     private var snapshotJob: Job? = null
     private var lastSnapshotAt = 0L
     private var grid: RadarGrid? = null
-    private var gridJob: Job? = null
+    private val gridJobs = linkedMapOf<String, Job>()
+    private var gridGeneration = 0
+    private fun cancelGridRequests() {
+        gridGeneration++
+        val pending = gridJobs.values.toList()
+        gridJobs.clear()
+        pending.forEach { it.cancel() }
+    }
     private var numbersJob: Job? = null
     private var numbersRequest = 0
     private var alertJob: Job? = null
@@ -1581,14 +1365,18 @@ private class NativeRadarController(
     }
     private val failed = MapView.OnDidFailLoadingMapListener { message ->
         if (!disposed) {
+            acceptRenderedFrame = false
+            styleWaitJob?.cancel()
+            rasterWaitJob?.cancel()
             loading(false)
             if (Log.isLoggable(RADAR_LOG_TAG, Log.DEBUG))
                 Log.d(RADAR_LOG_TAG, "Map provider failed: $message")
             error(radarUnavailable(session.overlay, session.effectiveRange))
         }
     }
-    private val rendered = MapView.OnDidFinishRenderingMapListener { fully ->
-        if (fully && !disposed && !nowcastBusy) {
+    private val rendered = MapView.OnDidFinishRenderingFrameListener { fully, _, _ ->
+        if (fully && !disposed && !nowcastBusy && style != null && acceptRenderedFrame) {
+            rasterWaitJob?.cancel()
             loading(false)
             if (current != null && session.frames.savedAt == null && DisplayCache.isOnline()) {
                 session.liveReady = true
@@ -1600,7 +1388,7 @@ private class NativeRadarController(
 
     init {
         view.addOnDidFailLoadingMapListener(failed)
-        view.addOnDidFinishRenderingMapListener(rendered)
+        view.addOnDidFinishRenderingFrameListener(rendered)
         view.getMapAsync { ready ->
             if (!disposed) {
                 map = ready
@@ -1612,7 +1400,7 @@ private class NativeRadarController(
                         8,
                         0,
                         8,
-                        (76 * view.resources.displayMetrics.density).roundToInt(),
+                        controlInset,
                     )
                 ready.addOnCameraIdleListener(cameraIdle)
                 ready.addOnCameraMoveStartedListener {
@@ -1641,6 +1429,18 @@ private class NativeRadarController(
         }
     }
 
+    fun setResumed(value: Boolean) {
+        resumed = value
+        if (value) {
+            map?.triggerRepaint()
+            updateWindParticles(grid)
+            if (style != null) updateLayers()
+        } else {
+            snapshotJob?.cancel()
+            windView?.pause()
+        }
+    }
+
     fun loadStyle(light: Boolean, retry: Int) {
         styleUrl = "https://tiles.openfreemap.org/styles/${if (light) "positron" else "dark"}"
         val force = retry != styleRetry
@@ -1654,7 +1454,20 @@ private class NativeRadarController(
         if (!force && requestedStyleUrl == styleUrl) return
         requestedStyleUrl = styleUrl
         val request = ++styleRequest
+        rasterWaitJob?.cancel()
+        styleWaitJob?.cancel()
+        styleWaitJob = scope.launch {
+            delay(15_000)
+            if (!disposed && request == styleRequest && style == null) {
+                loading(false)
+                error("Map could not load")
+            }
+        }
         loading(true)
+        acceptRenderedFrame = false
+        frameRequest++
+        nowcastRequest++
+        style = null
         snapshotJob?.cancel()
         nowcastJob?.cancel()
         numbersJob?.cancel()
@@ -1665,6 +1478,7 @@ private class NativeRadarController(
         cached.clear()
         ready.setStyle(Style.Builder().fromUri(styleUrl)) { loaded ->
             if (!disposed && request == styleRequest) {
+                styleWaitJob?.cancel()
                 style = loaded
                 error(null)
                 updateLayers()
@@ -1681,8 +1495,9 @@ private class NativeRadarController(
         }
     }
 
-    fun zoom(delta: Double) {
-        map?.animateCamera(CameraUpdateFactory.zoomBy(delta))
+    fun setControlInset(bottom: Int) {
+        controlInset = bottom
+        if (!compact) map?.uiSettings?.setAttributionMargins(8, 0, 8, bottom)
     }
 
     fun clearPin() {
@@ -1721,10 +1536,11 @@ private class NativeRadarController(
                 }
             }
             cached.clear()
-            gridJob?.cancel()
+            cancelGridRequests()
             gridCache.clear()
             grid = null
             alertRequestJob?.cancel()
+            nowcastRequest++
             nowcastJob?.cancel()
             nowcast.clear()
             nowcastCrop = null
@@ -1744,8 +1560,9 @@ private class NativeRadarController(
     private fun updateLayers() {
         val s = style ?: return
         if (disposed || base.isBlank()) return
-        nowcastJob?.cancel()
-        nowcastRequest++
+        rasterWaitJob?.cancel()
+        val request = ++frameRequest
+        acceptRenderedFrame = false
         nowcastBusy = false
         s.getLayer("wx-nowcast")?.setProperties(visibility(Property.NONE))
         val forecast = current?.takeIf { it.leadMinutes > 0 }
@@ -1796,7 +1613,24 @@ private class NativeRadarController(
                     raiseRadarImageLayer(s, layer)
                 }
             }
-            if (forecast != null) updateNowcast() else error(null)
+            if (forecast != null) updateNowcast() else {
+                error(null)
+                // A global "fully rendered" event can be absent forever when an unrelated
+                // base-map tile fails. It must not own the radar playback clock.
+                rasterWaitJob = scope.launch {
+                    delay(1_800)
+                    if (!disposed && style === s && request == frameRequest && !nowcastBusy)
+                        waiting(false)
+                }
+                // Ignore callbacks already queued before this selection. Native readiness is
+                // advisory only; rendered-image regression tests validate actual imagery.
+                view.post {
+                    if (!disposed && style === s && request == frameRequest) {
+                        acceptRenderedFrame = true
+                        map?.triggerRepaint()
+                    }
+                }
+            }
             val keep = visible.map { "wx-${it.key}" }.toSet()
             while (cached.size > 8) {
                 val oldest = cached.firstOrNull { it !in keep } ?: break
@@ -1819,11 +1653,9 @@ private class NativeRadarController(
         val s = style ?: return
         val ready = map ?: return
         if (disposed || base.isBlank()) return
-        nowcastJob?.cancel()
         nowcastBusy = true
         loading(true)
         error(null)
-        s.getLayer("wx-nowcast")?.setProperties(visibility(Property.NONE))
         val viewBounds = ready.projection.visibleRegion.latLngBounds
         val bounds =
             try {
@@ -1838,6 +1670,9 @@ private class NativeRadarController(
             }
         val desired = bounds?.let { NativeRadarNowcast.crop(it, ready.cameraPosition.zoom) }
         if (desired == null) {
+            nowcastRequest++
+            nowcastJob?.cancel()
+            s.getLayer("wx-nowcast")?.setProperties(visibility(Property.NONE))
             nowcastBusy = false
             loading(false)
             error("Forecast unavailable here")
@@ -1849,67 +1684,62 @@ private class NativeRadarController(
             } ?: desired.also { nowcastCrop = it }
         val server = base
         val local = ready.cameraPosition.zoom >= 6
+        val workKey = "$server/${frame.scanTime}/${frame.revision}/${crop.query}/$local"
+        if (nowcastJob?.isActive == true && nowcastWorkKey == workKey) return
         val request = ++nowcastRequest
+        nowcastJob?.cancel()
+        nowcastBusy = true
+        loading(true)
+        nowcastWorkKey = workKey
         nowcastJob = scope.launch {
+            var imageInstalled = false
             try {
-                val result = nowcast.render(server, frame, crop, frame.leadMinutes, local)
-                if (
-                    disposed ||
-                        style !== s ||
-                        current?.key != frame.key ||
-                        base != server ||
-                        nowcastRequest != request
-                )
-                    return@launch
-                val b = result.bounds
-                val quad =
-                    LatLngQuad(
-                        LatLng(b.north, b.west),
-                        LatLng(b.north, b.east),
-                        LatLng(b.south, b.east),
-                        LatLng(b.south, b.west),
-                    )
-                val existing = s.getSourceAs<ImageSource>("wx-nowcast-source")
-                if (existing == null) {
-                    s.addSource(ImageSource("wx-nowcast-source", quad, result.bitmap))
-                    val layer =
-                        RasterLayer("wx-nowcast", "wx-nowcast-source")
-                            .withProperties(rasterOpacity(.75f), rasterFadeDuration(0f))
-                    s.addLayerBelow(
-                        layer,
-                        s.layers.firstOrNull { it is SymbolLayer }?.id ?: s.layers.last().id,
-                    )
-                } else {
-                    existing.setCoordinates(quad)
-                    existing.setImage(result.bitmap)
+                var requestedFrame = frame
+                while (isActive) {
+                    val result = nowcast.render(server, requestedFrame, crop, requestedFrame.leadMinutes, local)
+                    if (disposed || style !== s || base != server || nowcastRequest != request) return@launch
+                    val latest = current?.takeIf { it.leadMinutes > 0 && it.scanTime == frame.scanTime && it.revision == frame.revision }
+                        ?: return@launch
+                    // Let a cold input fetch finish even when scrubbing selects another lead.
+                    // Only the latest requested output may be installed into the native map.
+                    if (latest.key != requestedFrame.key) {
+                        requestedFrame = latest
+                        continue
+                    }
+                    val b = result.bounds
+                    val quad = LatLngQuad(LatLng(b.north, b.west), LatLng(b.north, b.east),
+                        LatLng(b.south, b.east), LatLng(b.south, b.west))
+                    val existing = s.getSourceAs<ImageSource>("wx-nowcast-source")
+                    if (existing == null) {
+                        s.addSource(ImageSource("wx-nowcast-source", quad, result.bitmap))
+                        s.addLayerBelow(RasterLayer("wx-nowcast", "wx-nowcast-source")
+                            .withProperties(rasterOpacity(.75f), rasterFadeDuration(0f)),
+                            s.layers.firstOrNull { it is SymbolLayer }?.id ?: s.layers.last().id)
+                    } else {
+                        existing.setCoordinates(quad)
+                        existing.setImage(result.bitmap)
+                    }
+                    s.getLayer("wx-nowcast")?.let { layer ->
+                        raiseRadarImageLayer(s, layer)
+                        layer.setProperties(visibility(Property.VISIBLE))
+                    }
+                    lastNowcastImage = latest.key to result
+                    imageInstalled = true
+                    error(null)
+                    acceptRenderedFrame = true
+                    map?.triggerRepaint()
+                    break
                 }
-                // A satellite source may have been added since this image layer was cached.
-                s.getLayer("wx-nowcast")?.let { layer ->
-                    raiseRadarImageLayer(s, layer)
-                    layer.setProperties(visibility(Property.VISIBLE))
-                }
-                lastNowcastImage = frame.key to result
-                error(null)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (Log.isLoggable(RADAR_LOG_TAG, Log.DEBUG))
-                    Log.d(RADAR_LOG_TAG, "Motion forecast failed", e)
-                if (
-                    !disposed &&
-                        style === s &&
-                        current?.key == frame.key &&
-                        nowcastRequest == request
-                )
-                    error(
-                        if (!isRadarNowcastFresh(frame.scanTime, Instant.now().epochSecond))
-                            "Radar scan too old"
-                        else "Forecast unavailable"
-                    )
+                if (Log.isLoggable(RADAR_LOG_TAG, Log.DEBUG)) Log.d(RADAR_LOG_TAG, "Motion forecast failed", e)
+                if (!disposed && style === s && current?.leadMinutes?.let { it > 0 } == true && nowcastRequest == request)
+                    error(if (!isRadarNowcastFresh(frame.scanTime, Instant.now().epochSecond)) "Radar scan too old" else "Forecast unavailable")
             } finally {
-                if (current?.key == frame.key && style === s && nowcastRequest == request) {
+                if (!disposed && style === s && nowcastRequest == request && current?.leadMinutes?.let { it > 0 } == true) {
                     nowcastBusy = false
-                    loading(false)
+                    if (imageInstalled) waiting(false) else loading(false)
                 }
             }
         }
@@ -1924,7 +1754,7 @@ private class NativeRadarController(
         val loaded = style ?: return
         val now = System.currentTimeMillis()
         if (
-            disposed ||
+            disposed || !resumed ||
                 !DisplayCache.isOnline() ||
                 snapshotJob?.isActive == true ||
                 now - lastSnapshotAt < 10_000 ||
@@ -2052,15 +1882,27 @@ private class NativeRadarController(
 
     private fun updateScale() {
         val ready = map ?: return
-        val metersPerPixel =
-            156543.03392 * cos(Math.toRadians(session.latitude)) /
-                2.0.pow(ready.cameraPosition.zoom)
-        val miles = metersPerPixel * 90 / 1609.344
-        val distance =
-            listOf(.1, .2, .5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0).lastOrNull { it <= miles }
-                ?: .1
-        session.scale =
-            (if (distance < 1) "${(distance*5280).roundToInt()} ft" else "${distance.toInt()} mi")
+        if (view.width <= 0 || view.height <= 0) return
+        val density = view.resources.displayMetrics.density
+        val half = 44f * density
+        val x = view.width / 2f
+        val y = view.height / 2f
+        val left = ready.projection.fromScreenLocation(android.graphics.PointF(x - half, y))
+        val right = ready.projection.fromScreenLocation(android.graphics.PointF(x + half, y))
+        val meters = left.distanceTo(right)
+        if (!meters.isFinite() || meters <= 0) return
+        val miles = meters / 1609.344
+        val length = if (miles < 1) {
+            val feet = listOf(50, 100, 200, 500, 1000, 2000, 5000).lastOrNull { it * .3048 <= meters } ?: 50
+            session.scale = "$feet ft"
+            feet * .3048
+        } else {
+            val distance = listOf(1, 2, 5, 10, 20, 50, 100, 200).lastOrNull { it <= miles } ?: 1
+            session.scale = "$distance mi"
+            distance * 1609.344
+        }
+        session.scaleWidth = (88 * length / meters).toFloat()
+
     }
 
     private fun loadAlerts() {
@@ -2263,37 +2105,43 @@ private class NativeRadarController(
     }
 
     private fun syncGrid(frame: RadarFrame?) {
-        gridJob?.cancel()
-        if (frame?.grid == null) {
-            grid = null
-            updateNumbers()
-            return
-        }
-        gridCache[frame.key]?.let {
-            grid = it
-            updateNumbers()
-            return
-        }
-        // Never keep labels or wind particles from a different frame while its grid loads.
-        grid = null
+        grid = frame?.let { gridCache[it.key] }
         updateNumbers()
+        if (frame?.grid == null || grid != null || gridJobs[frame.key]?.isActive == true) return
         val server = base
-        gridJob = scope.launch {
+        val generation = DisplayCache.generation
+        val requestGeneration = gridGeneration
+        // A frame changes more quickly than a cold grid can download. Let bounded requests
+        // finish into the cache; never publish a late result into a different frame.
+        if (gridJobs.size >= 3) return
+        val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 val loaded = loadRadarGrid(server, frame) ?: return@launch
-                if (!disposed && current?.key == frame.key && base == server) {
+                if (!disposed && base == server && requestGeneration == gridGeneration && generation == DisplayCache.generation) {
                     gridCache[frame.key] = loaded
-                    while (gridCache.size > 48) gridCache.remove(gridCache.keys.first())
-                    grid = loaded
-                    updateNumbers()
+                    while (gridCache.size > 8 || gridCache.values.sumOf { it.bytes.size.toLong() } > 24L * 1024 * 1024)
+                        gridCache.remove(gridCache.keys.first())
+                    if (current?.key == frame.key) {
+                        grid = loaded
+                        updateNumbers()
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                grid = null
-                updateNumbers()
+                if (!disposed && current?.key == frame.key && base == server && requestGeneration == gridGeneration) {
+                    grid = null
+                    updateNumbers()
+                }
+            } finally {
+                if (gridJobs[frame.key] === currentCoroutineContext()[Job]) gridJobs.remove(frame.key)
+                val latest = current
+                if (!disposed && base == server && requestGeneration == gridGeneration && latest?.key != frame.key && latest?.grid != null)
+                    syncGrid(latest)
             }
         }
+        gridJobs[frame.key] = job
+        job.start()
     }
 
     private fun updateNumbers() {
@@ -2490,8 +2338,10 @@ private class NativeRadarController(
     fun close() {
         disposed = true
         snapshotJob?.cancel()
+        rasterWaitJob?.cancel()
+        styleWaitJob?.cancel()
         nowcastJob?.cancel()
-        gridJob?.cancel()
+        cancelGridRequests()
         numbersJob?.cancel()
         alertJob?.cancel()
         alertRequestJob?.cancel()
@@ -2501,7 +2351,7 @@ private class NativeRadarController(
         nowcast.clear()
         map?.removeOnCameraIdleListener(cameraIdle)
         view.removeOnDidFailLoadingMapListener(failed)
-        view.removeOnDidFinishRenderingMapListener(rendered)
+        view.removeOnDidFinishRenderingFrameListener(rendered)
         style = null
         map = null
     }
