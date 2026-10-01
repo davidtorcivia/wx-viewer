@@ -14,8 +14,8 @@ android {
         applicationId = "zone.disinfo.wx"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.2.3-preview"
+        versionCode = 7
+        versionName = "0.2.4-preview"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {
