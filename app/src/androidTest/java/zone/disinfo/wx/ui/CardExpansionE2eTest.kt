@@ -5,19 +5,18 @@ import android.graphics.Color as PixelColor
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.captureToImage
-import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
-import androidx.compose.ui.test.performScrollToNode
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
@@ -56,7 +55,7 @@ class CardExpansionE2eTest {
     @Test
     fun conditionCloseKeepsPaintAndSwitchesCanReverse() {
         showWeather()
-        scrollTo("condition_feels")
+        scrollTo("condition_feels", sectionKey = "conditions")
         node("condition_hint_feels").assertIsDisplayed()
         node("condition_hint_dew").assertIsDisplayed()
         node("condition_hint_sky").assertDoesNotExist()
@@ -128,7 +127,7 @@ class CardExpansionE2eTest {
     fun dailyCloseKeepsPaintAndReopensWhileCollapsing() {
         showWeather()
         val card = "day_$detailDay"
-        scrollTo(card)
+        scrollTo(card, sectionKey = "daily")
         val closedHeight = height(card)
         val closedHint = node("day_hint_$detailDay").captureToImage().asAndroidBitmap()
         node(card).performClick()
@@ -159,7 +158,7 @@ class CardExpansionE2eTest {
     fun disabledMotionSettlesImmediatelyAndOnlyExpandableCardsHaveHints() {
         scale.floatValue = 0f
         showWeather()
-        scrollTo("condition_feels")
+        scrollTo("condition_feels", sectionKey = "conditions")
         compose.mainClock.autoAdvance = false
         node("condition_feels").performClick()
         advance(32)
@@ -174,7 +173,7 @@ class CardExpansionE2eTest {
         assertEquals(0, height("condition_detail_row_feels"))
 
         compose.mainClock.autoAdvance = true
-        scrollTo("day_$detailDay")
+        scrollTo("day_$detailDay", sectionKey = "daily")
         compose.mainClock.autoAdvance = false
         val closedHeight = height("day_$detailDay")
         node("day_$detailDay").performClick()
@@ -186,7 +185,7 @@ class CardExpansionE2eTest {
         assertEquals(closedHeight, height("day_$detailDay"))
 
         compose.mainClock.autoAdvance = true
-        scrollTo("warning_expandable")
+        scrollTo("warning_expandable", sectionKey = "warnings")
         node("warning_hint_expandable").assertIsDisplayed()
         node("warning_hint_summary").assertDoesNotExist()
         node("warning_expandable").performClick()
@@ -241,9 +240,23 @@ class CardExpansionE2eTest {
     private fun assertState(tag: String, state: String) =
         node(tag).assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, state))
 
-    private fun scrollTo(tag: String) {
-        compose.onNodeWithTag("weather_overview").performScrollToNode(hasTestTag(tag))
-        node(tag).performScrollTo()
+    private fun scrollTo(tag: String, sectionKey: String) {
+        // Compose 1.7's performScrollToNode repeatedly dumps the list's descendants on the
+        // instrumentation thread while lazy layout can invalidate them on the UI thread.
+        // The collection lookup avoids that dump; resolve and invoke the existing keyed-scroll
+        // semantics on the UI thread, then use the normal node action within the visible section.
+        val lists = compose.onAllNodesWithTag("weather_overview").fetchSemanticsNodes()
+        assertEquals("Expected one weather overview", 1, lists.size)
+        val list = lists.single()
+        compose.runOnIdle {
+            val config = list.config
+            val index = config[SemanticsProperties.IndexForKey](sectionKey)
+            assertTrue("Weather section $sectionKey must exist", index >= 0)
+            val scroll = checkNotNull(config[SemanticsActions.ScrollToIndex].action)
+            assertTrue("Weather section $sectionKey must accept scrolling", scroll(index))
+        }
+        compose.waitForIdle()
+        node(tag).performScrollTo().assertIsDisplayed()
     }
 
     private fun advance(millis: Long) {
