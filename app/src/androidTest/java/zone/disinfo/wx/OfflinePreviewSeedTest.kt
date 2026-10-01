@@ -96,7 +96,13 @@ class OfflinePreviewSeedTest {
                     .put("heroF", temperature).put("ensembleF", ensembleTemperature)
                     .put("station", station).put("radarSavedAt", radarSavedAt))
             }
-            SettingsStore(context).save(AppSettings(serverUrl = server, places = places))
+            val settings = AppSettings(serverUrl = server, places = places)
+            SettingsStore(context).save(settings)
+            // Instrumentation exits without an Activity/Service lifecycle transition to flush
+            // apply(). A commit on this same preferences file is a documented durability barrier.
+            assertTrue(context.getSharedPreferences("wx_settings_v1", Context.MODE_PRIVATE)
+                .edit().commit())
+            assertEquals(settings, SettingsStore(context).load())
             assertTrue(context.getSharedPreferences("ensemble_view", Context.MODE_PRIVATE).edit()
                 .clear().putString("model", "refs").putString("station", "JFK")
                 .putString("mode", "bands").putBoolean("knots", true).commit())
