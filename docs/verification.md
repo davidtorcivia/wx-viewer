@@ -1,20 +1,26 @@
 # Verification
 
+## 0.2.2-preview candidate
+
+Version code 5 corrects Radar controls left below the removed header, retains a clear saved-map status, removes the header theme shortcut, and adds symmetric card closing with subtle disclosure chevrons. Theme selection remains in Settings. The chart renderer is unchanged from `cd389569f989406c6ffbe608e228243c43cc6df6`.
+
+Rendered regression coverage checks the Radar controls against the actual map bounds in expanded, collapsed, and saved offline states. Card checks cover retained exit content, switching, interrupted transitions, and motion scale. Fresh build/lint and device outcomes belong to this commit’s Actions run; source or test compilation alone is not a runtime pass.
+
 ## 0.2.1-preview candidate
 
 This snapshot adds chart and gesture optimizations, persistent offline data, a larger radar-popup close target, centered hourly-ribbon labels, and concise saved-data status. Version code is 4; the app supports API 26+ and targets API 35.
 
 Revision `ada2330a557fccbaeb3178dd2cc9abc7df3a776f` passed hosted build/lint, all **62 ordinary API 35 scenarios**, and the separate native radar and fixture-free minified offline flows. The three staging methods are explicitly skipped in the ordinary suite and run separately. Actual preview coverage includes two fresh processes, saved-place switching, cached Plumes/Radar, Settings/Alerts navigation, and a network flap. [Validated run](https://github.com/davidtorcivia/wx-viewer/actions/runs/36796571589).
 
-This candidate adds retained GPU layers for static charts and the finished spiral, based on trace evidence that rendering still replayed the cached paths. Its build, screenshots and performance comparison require fresh verification. The preceding candidate reduced the shared Weather workload's median frame CPU time by about 7%, but did not improve its tail or establish a startup gain. No broad speed claim follows from those measurements.
+The delivered GPU-layer revision `cd389569f989406c6ffbe608e228243c43cc6df6` passed build/lint, all 62 ordinary API 35 scenarios, and the separately staged native radar and fixture-free minified offline flows. [Validated run](https://github.com/davidtorcivia/wx-viewer/actions/runs/36798098010).
 
-The earlier A/B/A workflow failed an unrelated immediate Alerts assertion and the baseline full-plume viewport search. Its successful Weather/startup scenario measurements remain separate evidence; no full-plume comparison was valid. Navigation synchronization is verified in the actual preview, and the new harness checks full-Plumes readiness, recovers scroll direction, and records separate held-scrub/scroll intervals. Consult the exact new commit's Actions artifacts for outcomes; compiled tests are not passed tests.
+Its [A/B/A run](https://github.com/davidtorcivia/wx-viewer/actions/runs/36798225613) completed all three timed workloads in every leg. Held-scrub median frame CPU time fell by 51–76% across the four charts on that emulator; this is not a physical-phone FPS claim. The overall workflow failed an unmeasured first-baseline UiAutomator stale-object lookup. Startup gains were not established: the common startup fixture includes legacy-cache migration, and loaded-hero observations did not improve. The between-chart seek P95 also remained about 11% worse. Raw timings, trace segments, and the workflow failure are retained separately from successful device validation.
 
 The `preview` variant is minified and non-debuggable, uses the existing development signing configuration, and excludes benchmark fixture entrypoints. The separate `benchmark` variant adds profileability and test setup. CI signing keys are temporary; CI APKs are not interchangeable with the locally signed preview used for upgrades.
 
 ## Device coverage
 
-There are 65 Android instrumentation methods: 62 ordinary scenarios plus three explicit seed/verify phases. The validation script reports ordinary-suite skips separately from those phases. Coverage includes navigation and persistence, supported precipitation types and stale/unknown handling, alert target selection, Rain watch lifecycle races, chart interactions, rendered daily-label centering, popup edge taps, cached forecasts/ensembles, and actual retained radar imagery.
+There are 68 Android instrumentation methods: 65 ordinary scenarios plus three explicit seed/verify phases. The validation script reports ordinary-suite skips separately from those phases. Coverage includes navigation and persistence, supported precipitation types and stale/unknown handling, alert target selection, Rain watch lifecycle races, chart interactions, rendered daily-label centering, popup edge taps, cached forecasts/ensembles, and actual retained radar imagery.
 
 `bash scripts/run-android-validation.sh` runs the ordinary suite and two additional flows:
 
