@@ -1,8 +1,5 @@
 package zone.disinfo.wx.ui
 
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.repeatOnLifecycle
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.CubicBezierEasing
@@ -44,6 +41,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlin.math.*
 import kotlinx.coroutines.CancellationException
 import zone.disinfo.wx.WxState
@@ -89,7 +89,12 @@ fun WebWeatherScreen(
         }
     val listState = rememberLazyListState()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    LaunchedEffect(lifecycle, state.settings.serverUrl, forecast?.station, state.networkAvailability) {
+    LaunchedEffect(
+        lifecycle,
+        state.settings.serverUrl,
+        forecast?.station,
+        state.networkAvailability,
+    ) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             val station = forecast?.station
             if (station == null || (station.km ?: Double.POSITIVE_INFINITY) > 40) {
@@ -546,25 +551,42 @@ private fun SourceWarning(warning: OfficialAlert, zone: String, units: DisplayUn
         Modifier.fillMaxWidth()
             .background(background, RoundedCornerShape(6.dp))
             .then(action)
+            .testTag("warning_${warning.id}")
             .padding(horizontal = 18.dp, vertical = 14.dp)
     ) {
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            WebText(
-                warning.title.substringBefore(" issued "),
-                22f,
-                70f,
-                800,
-                Modifier.alignByBaseline(),
-            )
-            warning.expiresAt?.let { end ->
-                val until =
-                    if (weatherDate(end, zone) == weatherDate(now, zone))
-                        "${units.timeOf(end,zone)} today"
-                    else "${clock(end,zone,"EEE")} ${units.timeOf(end,zone)}"
-                WebText("until $until", 14f, weight = 500, modifier = Modifier.alignByBaseline())
+        Row(verticalAlignment = Alignment.Top) {
+            FlowRow(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                WebText(
+                    warning.title.substringBefore(" issued "),
+                    22f,
+                    70f,
+                    800,
+                    Modifier.alignByBaseline(),
+                )
+                warning.expiresAt?.let { end ->
+                    val until =
+                        if (weatherDate(end, zone) == weatherDate(now, zone))
+                            "${units.timeOf(end,zone)} today"
+                        else "${clock(end,zone,"EEE")} ${units.timeOf(end,zone)}"
+                    WebText(
+                        "until $until",
+                        14f,
+                        weight = 500,
+                        modifier = Modifier.alignByBaseline(),
+                    )
+                }
+            }
+            if (rest.isNotEmpty()) {
+                CardExpansionHint(
+                    expanded,
+                    MaterialTheme.colorScheme.onSurface,
+                    Modifier.padding(start = 8.dp, top = 6.dp)
+                        .testTag("warning_hint_${warning.id}"),
+                )
             }
         }
         lead?.let {
@@ -581,7 +603,7 @@ private fun SourceWarning(warning: OfficialAlert, zone: String, units: DisplayUn
                     animationSpec = tween(350, easing = CubicBezierEasing(.2f, .8f, .2f, 1f))
                 ),
         ) {
-            Column {
+            Column(Modifier.testTag("warning_detail_${warning.id}")) {
                 rest.forEach { (label, text) ->
                     val paragraph = buildAnnotatedString {
                         if (label.isNotBlank()) {

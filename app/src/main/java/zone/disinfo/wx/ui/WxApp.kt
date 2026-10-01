@@ -210,9 +210,6 @@ fun WxApp(
                 Column(Modifier.statusBarsPadding()) {
                     val ink = MaterialTheme.colorScheme.onSurface
                     val paper = MaterialTheme.colorScheme.surface
-                    val dark =
-                        state.settings.themeMode == ThemeMode.DARK ||
-                            state.settings.themeMode == ThemeMode.SYSTEM && isSystemInDarkTheme()
                     LaunchedEffect(state.place?.id, state.places) {
                         val index = state.places.indexOfFirst { it.id == state.place?.id }
                         if (index >= 0) placeScroll.animateScrollToItem(index)
@@ -304,23 +301,6 @@ fun WxApp(
                                         .testTag("find_place"),
                             ) {
                                 Icon(Icons.Outlined.Search, "Find a place", Modifier.size(22.dp))
-                            }
-                            IconButton(
-                                onClick = {
-                                    model.updateSettings(
-                                        state.settings.copy(
-                                            themeMode =
-                                                if (dark) ThemeMode.LIGHT else ThemeMode.DARK
-                                        )
-                                    )
-                                },
-                                modifier = Modifier.size(40.dp).testTag("toggle_theme"),
-                            ) {
-                                Icon(
-                                    if (dark) Icons.Outlined.LightMode else Icons.Outlined.DarkMode,
-                                    if (dark) "Switch to light mode" else "Switch to dark mode",
-                                    Modifier.size(22.dp),
-                                )
                             }
                             IconButton(
                                 onClick = { showSettings = true },

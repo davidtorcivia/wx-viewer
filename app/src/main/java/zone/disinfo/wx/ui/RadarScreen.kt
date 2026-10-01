@@ -537,7 +537,7 @@ private fun RadarView(
             session.time = a.time + (position - i) * (b.time - a.time).toDouble()
         }
     }
-    BoxWithConstraints(if (compact) modifier else modifier.fillMaxSize()) {
+    BoxWithConstraints(if (compact) modifier else modifier.fillMaxSize().testTag("radar_field")) {
         val viewportWidth = maxWidth
         NativeRadarMap(
             serverUrl,
@@ -565,18 +565,19 @@ private fun RadarView(
                             .testTag("radar_saved_image"),
                     contentScale = ContentScale.Fit,
                 )
-                Text(
-                    "Saved ${radarClock(saved.savedAt / 1000, timeZone, true)} · Last viewed area",
-                    fontSize = if (compact) 10.sp else 12.sp,
-                    modifier =
-                        Modifier.align(Alignment.TopCenter)
-                            .padding(8.dp)
-                            .background(paper, RoundedCornerShape(8.dp))
-                            .padding(8.dp, 5.dp)
-                            .testTag("radar_saved_timestamp"),
-                )
+                if (compact)
+                    Text(
+                        "Saved ${radarClock(saved.savedAt / 1000, timeZone, true)} · Last viewed area",
+                        fontSize = if (compact) 10.sp else 12.sp,
+                        modifier =
+                            Modifier.align(Alignment.TopCenter)
+                                .padding(8.dp)
+                                .background(paper, RoundedCornerShape(8.dp))
+                                .padding(8.dp, 5.dp)
+                                .testTag("radar_saved_timestamp"),
+                    )
             }
-        if (!session.showingSavedView)
+        if (compact && !session.showingSavedView)
             session.frames.savedAt?.let { savedAt ->
                 Text(
                     "Saved ${radarClock(savedAt / 1000, timeZone, true)} · Cached map areas only",
@@ -589,41 +590,72 @@ private fun RadarView(
                 )
             }
         if (!compact) {
-            Row(
-                Modifier.align(Alignment.TopStart).padding(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            // WxApp already applies the system and place-header insets. Anchor to the
+            // map field itself; a measured row also keeps saved status clear of controls.
+            Column(
+                Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                if (viewportWidth > 480.dp && !session.showingSavedView)
-                    Text(
-                        frame
-                            ?.let {
+                Row(
+                    Modifier.fillMaxWidth().testTag("radar_top_controls"),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Box(Modifier.weight(1f)) {
+                        RadarLegend(
+                            session,
+                            false,
+                            { changeOverlay(it) },
+                            (if (session.legendOpen) Modifier.width(224.dp)
+                                else Modifier.wrapContentWidth())
+                                .testTag("radar_legend"),
+                        )
+                    }
+                    Column(
+                        Modifier.clip(RoundedCornerShape(20.dp))
+                            .background(paper)
+                            .testTag("radar_map_controls")
+                    ) {
+                        RadarIcon(
+                            "+",
+                            "Zoom in",
+                            onClick = { if (!session.showingSavedView) controller?.zoom(1.0) },
+                        )
+                        RadarIcon(
+                            "−",
+                            "Zoom out",
+                            onClick = { if (!session.showingSavedView) controller?.zoom(-1.0) },
+                        )
+                        RadarIcon("⌖", "Find my location", onLocate)
+                    }
+                }
+                val saved = session.savedView?.takeIf { session.showingSavedView }
+                val savedAt = session.frames.savedAt
+                val status =
+                    when {
+                        saved != null ->
+                            "Saved ${radarClock(saved.savedAt / 1000, timeZone, true)} · Last viewed area"
+                        savedAt != null ->
+                            "Saved ${radarClock(savedAt / 1000, timeZone, true)} · Cached map areas only"
+                        viewportWidth > 480.dp ->
+                            frame?.let {
                                 if (it.field != null)
                                     if (it.source == "rtma") "Observed, RTMA"
                                     else "RRFS ${it.cycle}Z run"
-                                else "Updated ${radarClock(it.scanTime,timeZone)}"
+                                else "Updated ${radarClock(it.scanTime, timeZone)}"
                             }
-                            .orEmpty(),
+                        else -> null
+                    }
+                if (!status.isNullOrEmpty())
+                    Text(
+                        status,
                         fontSize = 12.sp,
-                        modifier = Modifier.background(paper, CircleShape).padding(14.dp, 12.dp),
+                        modifier =
+                            Modifier.background(paper, RoundedCornerShape(8.dp))
+                                .padding(8.dp, 5.dp)
+                                .testTag("radar_saved_timestamp"),
                     )
-            }
-            Column(
-                Modifier.align(Alignment.TopEnd)
-                    .padding(top = 60.dp, end = 12.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(paper)
-            ) {
-                RadarIcon(
-                    "+",
-                    "Zoom in",
-                    onClick = { if (!session.showingSavedView) controller?.zoom(1.0) },
-                )
-                RadarIcon(
-                    "−",
-                    "Zoom out",
-                    onClick = { if (!session.showingSavedView) controller?.zoom(-1.0) },
-                )
-                RadarIcon("⌖", "Find my location", onLocate)
             }
         }
         if (compact)
@@ -636,24 +668,15 @@ private fun RadarView(
                     .background(ink.copy(alpha = .78f), CircleShape),
                 paper,
             )
-        RadarLegend(
-            session,
-            compact,
-            { changeOverlay(it) },
-            Modifier.then(
-                if (compact)
-                    Modifier.align(Alignment.BottomCenter)
-                        .padding(start = 8.dp, end = 8.dp, bottom = 56.dp)
-                        .fillMaxWidth()
-                else
-                    Modifier.align(Alignment.TopStart)
-                        .padding(start = 12.dp, top = 60.dp)
-                        .then(
-                            if (session.legendOpen) Modifier.width(224.dp)
-                            else Modifier.wrapContentWidth()
-                        )
-            ),
-        )
+        if (compact)
+            RadarLegend(
+                session,
+                true,
+                { changeOverlay(it) },
+                Modifier.align(Alignment.BottomCenter)
+                    .padding(start = 8.dp, end = 8.dp, bottom = 56.dp)
+                    .fillMaxWidth(),
+            )
         Row(
             Modifier.align(Alignment.BottomCenter)
                 .padding(if (compact) 8.dp else 12.dp)
@@ -987,7 +1010,9 @@ private fun RadarLegend(
                             session.legendOpen = true
                             session.save()
                         }
-                        .padding(16.dp, 11.dp),
+                        .padding(16.dp, 11.dp)
+                        .testTag("radar_legend_expand")
+                        .semantics { contentDescription = "Expand radar legend" },
             )
         else {
             Row(
@@ -1031,7 +1056,9 @@ private fun RadarLegend(
                                     session.legendOpen = false
                                     session.save()
                                 }
-                                .padding(6.dp),
+                                .padding(6.dp)
+                                .testTag("radar_legend_collapse")
+                                .semantics { contentDescription = "Collapse radar legend" },
                     )
             }
             if (!compact) {

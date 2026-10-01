@@ -5,7 +5,6 @@ package zone.disinfo.wx.ui
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Shader
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -185,8 +184,13 @@ fun WebDailyForecast(
                             androidx.compose.ui.geometry.Size(6.dp.toPx(), 6.dp.toPx()),
                         )
                     }
+                    CardExpansionHint(
+                        expanded,
+                        ink,
+                        Modifier.padding(end = 6.dp).testTag("day_hint_${day.date}"),
+                    )
                 }
-                AnimatedVisibility(expanded) {
+                CardExpansion(expanded) {
                     Column(
                         Modifier.fillMaxWidth()
                             .padding(start = 12.dp, end = 12.dp, bottom = 14.dp)

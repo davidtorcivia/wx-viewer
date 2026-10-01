@@ -1,6 +1,5 @@
 package zone.disinfo.wx.ui
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -8,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -255,82 +255,102 @@ fun WebConditionCells(
             }
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             content.chunked(2).forEach { row ->
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    row.forEach { cell ->
-                        val expanded = cell.detail != null && openDetail == cell.detail
-                        val foreground = if (expanded) paper else ink
-                        Column(
-                            Modifier.weight(1f)
-                                .height(lockedHeight)
-                                .background(
-                                    if (expanded) ink else Color.Transparent,
-                                    RoundedCornerShape(6.dp),
-                                )
-                                .then(
-                                    if (cell.detail != null)
-                                        Modifier.clickable(role = Role.Button) {
-                                            onDetail(if (expanded) null else cell.detail)
-                                        }
-                                    else Modifier
-                                )
-                                .semantics {
-                                    if (cell.detail != null)
-                                        stateDescription = if (expanded) "Expanded" else "Collapsed"
+                Column {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        row.forEach { cell ->
+                            val expanded = cell.detail != null && openDetail == cell.detail
+                            val foreground = if (expanded) paper else ink
+                            Column(
+                                Modifier.weight(1f)
+                                    .height(lockedHeight)
+                                    .background(
+                                        if (expanded) ink else Color.Transparent,
+                                        RoundedCornerShape(6.dp),
+                                    )
+                                    .then(
+                                        if (cell.detail != null)
+                                            Modifier.clickable(role = Role.Button) {
+                                                onDetail(if (expanded) null else cell.detail)
+                                            }
+                                        else Modifier
+                                    )
+                                    .semantics {
+                                        if (cell.detail != null)
+                                            stateDescription =
+                                                if (expanded) "Expanded" else "Collapsed"
+                                    }
+                                    .testTag("condition_${cell.key}")
+                                    .padding(
+                                        start = 10.dp,
+                                        end = 10.dp,
+                                        top = 12.dp,
+                                        bottom = 10.dp,
+                                    )
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    WebText(
+                                        cell.title,
+                                        13f,
+                                        weight = 500,
+                                        modifier = Modifier.weight(1f),
+                                        color = foreground,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    if (cell.detail != null) {
+                                        Spacer(Modifier.width(6.dp))
+                                        CardExpansionHint(
+                                            expanded,
+                                            foreground,
+                                            Modifier.testTag("condition_hint_${cell.key}"),
+                                        )
+                                    }
                                 }
-                                .testTag("condition_${cell.key}")
-                                .padding(start = 10.dp, end = 10.dp, top = 12.dp, bottom = 10.dp)
-                        ) {
-                            WebText(
-                                cell.title,
-                                13f,
-                                weight = 500,
-                                color = foreground,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            WebText(
-                                cell.value,
-                                38f,
-                                56f,
-                                820,
-                                Modifier.padding(top = 6.dp),
-                                foreground,
-                                lineHeight = 39.9f,
-                                maxLines = 1,
-                            )
-                            WebText(
-                                cell.sub,
-                                13f,
-                                modifier = Modifier.padding(top = 4.dp),
-                                color = foreground,
-                                lineHeight = 17.55f,
-                            )
-                            Spacer(Modifier.weight(1f))
-                            CellMini(
-                                cell,
-                                foreground,
-                                expanded,
-                                units,
-                                forecast.timeZone,
-                                Modifier.padding(top = 10.dp)
-                                    .height(30.dp)
-                                    .widthIn(max = 140.dp)
-                                    .fillMaxWidth(),
-                            )
+                                WebText(
+                                    cell.value,
+                                    38f,
+                                    56f,
+                                    820,
+                                    Modifier.padding(top = 6.dp),
+                                    foreground,
+                                    lineHeight = 39.9f,
+                                    maxLines = 1,
+                                )
+                                WebText(
+                                    cell.sub,
+                                    13f,
+                                    modifier = Modifier.padding(top = 4.dp),
+                                    color = foreground,
+                                    lineHeight = 17.55f,
+                                )
+                                Spacer(Modifier.weight(1f))
+                                CellMini(
+                                    cell,
+                                    foreground,
+                                    expanded,
+                                    units,
+                                    forecast.timeZone,
+                                    Modifier.padding(top = 10.dp)
+                                        .height(30.dp)
+                                        .widthIn(max = 140.dp)
+                                        .fillMaxWidth(),
+                                )
+                            }
                         }
                     }
-                }
-                val active = row.firstOrNull { it.detail != null && it.detail == openDetail }
-                AnimatedVisibility(active != null) {
-                    if (active != null)
+                    val active = row.firstOrNull { it.detail != null && it.detail == openDetail }
+                    SwitchingCardDetail(
+                        detail = active?.detail,
+                        modifier = Modifier.testTag("condition_detail_row_${row.first().key}"),
+                    ) { retainedDetail ->
                         Box(
-                            Modifier.padding(top = 8.dp, bottom = 12.dp)
+                            Modifier.padding(top = 12.dp, bottom = 12.dp)
                                 .background(ink.copy(alpha = .06f), RoundedCornerShape(8.dp))
                                 .padding(14.dp)
                                 .testTag("condition_detail")
                         ) {
                             WebConditionDetail(
-                                active.detail!!,
+                                retainedDetail,
                                 forecast,
                                 place,
                                 units,
@@ -338,6 +358,7 @@ fun WebConditionCells(
                                 Modifier.fillMaxWidth(),
                             )
                         }
+                    }
                 }
             }
         }
