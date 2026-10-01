@@ -30,7 +30,9 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.Placeholder
@@ -88,12 +90,17 @@ fun WebWeatherScreen(
             mutableStateOf<List<ChartEnsemblePoint>>(emptyList())
         }
     val listState = rememberLazyListState()
+    var ensembleRefreshRevision by
+        remember(state.settings.serverUrl, forecast?.station?.id) {
+            mutableIntStateOf(state.refreshRevision)
+        }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(
         lifecycle,
         state.settings.serverUrl,
         forecast?.station,
         state.networkAvailability,
+        state.refreshRevision,
     ) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             val station = forecast?.station
@@ -101,6 +108,10 @@ fun WebWeatherScreen(
                 ensemble = emptyList()
                 return@repeatOnLifecycle
             }
+            // A manual revision bypasses the freshness interval once. Resuming the same
+            // screen should go back to the normal cache policy, including after a failure.
+            val force = ensembleRefreshRevision != state.refreshRevision
+            ensembleRefreshRevision = state.refreshRevision
             try {
                 EnsembleRepository.observe(
                         state.settings.serverUrl,
@@ -108,6 +119,7 @@ fun WebWeatherScreen(
                         "refs",
                         EnsembleCycle.latest("refs"),
                         "3hrly-TMP",
+                        force = force,
                     )
                     .collect {
                         ensemble = it.chartPoints()
@@ -136,281 +148,271 @@ fun WebWeatherScreen(
             state.cached && forecast != null && now - forecast.fetchedAt > 15 * 60_000
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val heroMinimum = maxHeight
-        LazyColumn(
-            state = listState,
-            modifier =
-                Modifier.fillMaxSize()
-                    .testTag("weather_overview")
-                    .semantics {
-                        stateDescription =
-                            if (state.rainNowcast?.isFresh(now) == true)
-                                "Live precipitation available"
-                            else if (state.rainStatus != null) "Live precipitation unavailable"
-                            else "Live precipitation loading"
-                    }
-                    .pointerInput(place.id) {
-                        awaitEachGesture {
-                            val down =
-                                awaitFirstDown(
-                                    requireUnconsumed = false,
-                                    pass = PointerEventPass.Final,
-                                )
-                            var moved = false
-                            var consumed = down.isConsumed
-                            do {
-                                val event = awaitPointerEvent(PointerEventPass.Final)
-                                val change = event.changes.firstOrNull { it.id == down.id }
-                                if (change != null) {
-                                    if (
-                                        (change.position - down.position).getDistance() >
-                                            6.dp.toPx()
-                                    )
-                                        moved = true
-                                    consumed = consumed || change.isConsumed
-                                }
-                            } while (event.changes.any { it.pressed })
-                            if (!moved && !consumed) clearSelection()
-                        }
-                    },
+        WeatherRefreshBox(
+            isRefreshing = state.refreshing,
+            placeName = place.name,
+            listState = listState,
+            onRefresh = onRefresh,
+            modifier = Modifier.fillMaxSize(),
         ) {
-            if (showSavedStatus)
-                item(key = "saved_status", contentType = "status") {
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .background(ink.copy(alpha = .06f))
-                            .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        val status =
-                            if (state.cached && forecast != null) {
-                                val minutes = ((now - forecast.fetchedAt).coerceAtLeast(0) / 60_000)
-                                val age =
-                                    when {
-                                        minutes < 1 -> "just now"
-                                        minutes < 60 -> "${minutes}m ago"
-                                        minutes < 24 * 60 -> "${minutes / 60}h ago"
-                                        else -> "${minutes / (24 * 60)}d ago"
-                                    }
-                                val phase =
-                                    when {
-                                        state.loading -> "updating"
-                                        state.networkAvailability == NetworkAvailability.OFFLINE ->
-                                            "offline"
-                                        state.error != null -> "update unavailable"
-                                        else -> null
-                                    }
-                                "Saved $age" + (phase?.let { " · $it" } ?: "")
-                            } else state.error ?: "Weather unavailable"
-                        WebText(status, 12f, weight = 500, modifier = Modifier.weight(1f))
-                        TextButton(onClick = onRefresh) { WebText("Retry", 12f, weight = 600) }
-                    }
-                }
-            item(key = "hero", contentType = "hero") {
-                val current = forecast?.let(::observationRow)
-                val selected = selectedTime?.let { weatherRowAt(forecast?.hours.orEmpty(), it) }
-                val live = state.rainNowcast?.takeIf { it.isFresh(now) }
-                val temp = selected?.tempF ?: current?.tempF
-                val stops =
-                    remember(rows, current?.tempF, dark) {
-                        val sample = rows.take(25)
-                        val n = (sample.size - 1).coerceAtLeast(1)
-                        (0..sample.lastIndex step 2).mapNotNull { i ->
-                            val window =
-                                sample
-                                    .subList(
-                                        (i - 1).coerceAtLeast(0),
-                                        (i + 2).coerceAtMost(sample.size),
-                                    )
-                                    .mapNotNull { it.tempF }
-                            if (window.isEmpty()) null
-                            else i.toFloat() / n to heroColor(window.average(), dark)
-                        }
-                    }
-                val brush =
-                    remember(stops, current?.tempF, dark) {
-                        if (stops.size >= 2) Brush.horizontalGradient(*stops.toTypedArray())
-                        else
-                            Brush.horizontalGradient(
-                                listOf(
-                                    heroColor(current?.tempF, dark),
-                                    heroColor(current?.tempF, dark),
-                                )
-                            )
-                    }
-                Box(Modifier.fillMaxWidth().heightIn(min = heroMinimum).background(brush)) {
-                    Row(Modifier.fillMaxWidth().height(10.dp).align(Alignment.TopCenter)) {
-                        rows.take(24).forEach { r ->
-                            Box(
-                                Modifier.weight(1f)
-                                    .fillMaxHeight()
-                                    .background(
-                                        ink.copy(
-                                            alpha =
-                                                ((r.cloud ?: 0.0) / 100 * .85)
-                                                    .coerceIn(0.0, 1.0)
-                                                    .toFloat()
-                                        )
-                                    )
-                            )
-                        }
-                    }
-                    Column(
-                        Modifier.fillMaxWidth()
-                            .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 78.dp)
-                    ) {
-                        val label =
-                            if (selected != null)
-                                "${if(weatherDate(selected.timeMillis,zone)==weatherDate(now,zone))"Today"else clock(selected.timeMillis,zone,"EEE")} ${units.hourText(selected.timeMillis,zone)} · forecast"
-                            else
-                                forecast?.observation?.let {
-                                    "Now · observed ${units.timeOf(it.timeMillis,zone)} ${clock(it.timeMillis,zone,"z")}${observationAge(it.timeMillis,now)} · ${place.name}"
-                                } ?: "Now · ${place.name}"
-                        WebText(label, 14f, weight = 500)
-                        WebText(
-                            degrees(temp, units),
-                            260f,
-                            52f,
-                            820,
-                            Modifier.padding(top = 6.dp)
-                                .offset(x = (-10.4).dp)
-                                // CSS permits negative leading; Compose otherwise retains the
-                                // font's 269dp natural line box even with 239.2sp lineHeight.
-                                .height(heroLineHeight)
-                                .wrapContentHeight(Alignment.CenterVertically, unbounded = true)
-                                .testTag("hero_temperature"),
-                            lineHeight = 239.2f,
-                            maxLines = 1,
-                            letterSpacing = -7.8f,
-                        )
-                        val headline = sourceHeadline(forecast, live, place, units, now)
-                        if (headline.isNotBlank())
-                            WebText(
-                                headline,
-                                20f,
-                                92f,
-                                500,
-                                Modifier.padding(top = 22.dp),
-                                lineHeight = 23f,
-                            )
-                        else if (forecast == null && !state.loading)
-                            WebText(
-                                "Forecast unavailable. Try again in a moment.",
-                                20f,
-                                92f,
-                                500,
-                                Modifier.padding(top = 22.dp),
-                                lineHeight = 23f,
-                            )
-                        if (live?.rain != null)
-                            LiveRainMinutes(
-                                live,
-                                zone,
-                                Modifier.fillMaxWidth().padding(top = 14.dp),
-                                units,
-                            )
-                        if (
-                            state.rainStatus != null &&
-                                !state.loading &&
-                                forecast != null &&
-                                !showSavedStatus
-                        )
-                            WebText(
-                                "Live precipitation unavailable",
-                                11f,
-                                modifier = Modifier.padding(top = 8.dp),
-                            )
-                    }
-                    Row(Modifier.fillMaxWidth().align(Alignment.BottomCenter)) {
-                        rows
-                            .take(24)
-                            .filterIndexed { index, _ -> index % 2 == 0 }
-                            .forEachIndexed { index, row ->
-                                val active =
-                                    selectedTime?.let {
-                                        it >= row.timeMillis && it < row.timeMillis + WX_HOUR
-                                    } == true
-                                val color = if (active) MaterialTheme.colorScheme.surface else ink
-                                Column(
-                                    Modifier.weight(1f)
-                                        .background(
-                                            if (active) ink
-                                            else if (index % 2 == 0) ink.copy(alpha = .05f)
-                                            else Color.Transparent
-                                        )
-                                        .clickable(role = Role.Button) {
-                                            val time = if (index == 0) null else row.timeMillis
-                                            selectedTime = if (selectedTime == time) null else time
-                                            openDetail = null
+            LazyColumn(
+                state = listState,
+                modifier =
+                    Modifier.fillMaxSize()
+                        .testTag("weather_overview")
+                        .semantics {
+                            customActions =
+                                if (state.refreshing) emptyList()
+                                else
+                                    listOf(
+                                        CustomAccessibilityAction("Refresh weather for ${place.name}") {
+                                            onRefresh()
+                                            true
                                         }
-                                        .testTag("hour_strip_$index")
-                                        .padding(start = 6.dp, top = 8.dp, bottom = 10.dp)
-                                ) {
-                                    WebText(
-                                        units.hourOf(row.timeMillis, zone),
-                                        11f,
-                                        weight = 500,
-                                        color = color,
-                                        maxLines = 1,
                                     )
-                                    WebText(
-                                        degrees(row.tempF, units),
-                                        18f,
-                                        64f,
-                                        820,
-                                        color = color,
-                                        maxLines = 1,
+                            stateDescription =
+                                if (state.rainNowcast?.isFresh(now) == true)
+                                    "Live precipitation available"
+                                else if (state.rainStatus != null) "Live precipitation unavailable"
+                                else "Live precipitation loading"
+                        }
+                        .pointerInput(place.id) {
+                            awaitEachGesture {
+                                val down =
+                                    awaitFirstDown(
+                                        requireUnconsumed = false,
+                                        pass = PointerEventPass.Final,
                                     )
-                                }
+                                var moved = false
+                                var consumed = down.isConsumed
+                                do {
+                                    val event = awaitPointerEvent(PointerEventPass.Final)
+                                    val change = event.changes.firstOrNull { it.id == down.id }
+                                    if (change != null) {
+                                        if (
+                                            (change.position - down.position).getDistance() >
+                                                6.dp.toPx()
+                                        )
+                                            moved = true
+                                        consumed = consumed || change.isConsumed
+                                    }
+                                } while (event.changes.any { it.pressed })
+                                if (!moved && !consumed) clearSelection()
                             }
+                        },
+            ) {
+                if (showSavedStatus)
+                    item(key = "saved_status", contentType = "status") {
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .background(ink.copy(alpha = .06f))
+                                .padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            val status =
+                                if (state.cached && forecast != null) {
+                                    val minutes = ((now - forecast.fetchedAt).coerceAtLeast(0) / 60_000)
+                                    val age =
+                                        when {
+                                            minutes < 1 -> "just now"
+                                            minutes < 60 -> "${minutes}m ago"
+                                            minutes < 24 * 60 -> "${minutes / 60}h ago"
+                                            else -> "${minutes / (24 * 60)}d ago"
+                                        }
+                                    val phase =
+                                        when {
+                                            state.loading -> "updating"
+                                            state.networkAvailability == NetworkAvailability.OFFLINE ->
+                                                "offline"
+                                            state.error != null -> "update unavailable"
+                                            else -> null
+                                        }
+                                    "Saved $age" + (phase?.let { " · $it" } ?: "")
+                                } else state.error ?: "Weather unavailable"
+                            WebText(status, 12f, weight = 500, modifier = Modifier.weight(1f))
+                            TextButton(onClick = onRefresh, enabled = !state.refreshing) {
+                                WebText("Retry", 12f, weight = 600)
+                            }
+                        }
                     }
-                }
-            }
-            if (state.warnings.isNotEmpty())
-                item(key = "warnings", contentType = "warnings") {
-                    Column(
-                        Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        state.warnings.forEach { warning ->
-                            SourceWarning(warning, zone, units, now)
+                item(key = "hero", contentType = "hero") {
+                    val current = forecast?.let { observationRow(it, now) }
+                    val selected = selectedTime?.let { weatherRowAt(forecast?.hours.orEmpty(), it) }
+                    val live = state.rainNowcast?.takeIf { it.isFresh(now) }
+                    val temp = selected?.tempF ?: current?.tempF
+                    val stops =
+                        remember(rows, current?.tempF, dark) {
+                            val sample = rows.take(25)
+                            val n = (sample.size - 1).coerceAtLeast(1)
+                            (0..sample.lastIndex step 2).mapNotNull { i ->
+                                val window =
+                                    sample
+                                        .subList(
+                                            (i - 1).coerceAtLeast(0),
+                                            (i + 2).coerceAtMost(sample.size),
+                                        )
+                                        .mapNotNull { it.tempF }
+                                if (window.isEmpty()) null
+                                else i.toFloat() / n to heroColor(window.average(), dark)
+                            }
+                        }
+                    val brush =
+                        remember(stops, current?.tempF, dark) {
+                            if (stops.size >= 2) Brush.horizontalGradient(*stops.toTypedArray())
+                            else
+                                Brush.horizontalGradient(
+                                    listOf(
+                                        heroColor(current?.tempF, dark),
+                                        heroColor(current?.tempF, dark),
+                                    )
+                                )
+                        }
+                    Box(Modifier.fillMaxWidth().heightIn(min = heroMinimum).background(brush)) {
+                        Row(Modifier.fillMaxWidth().height(10.dp).align(Alignment.TopCenter)) {
+                            rows.take(24).forEach { r ->
+                                Box(
+                                    Modifier.weight(1f)
+                                        .fillMaxHeight()
+                                        .background(
+                                            ink.copy(
+                                                alpha =
+                                                    ((r.cloud ?: 0.0) / 100 * .85)
+                                                        .coerceIn(0.0, 1.0)
+                                                        .toFloat()
+                                            )
+                                        )
+                                )
+                            }
+                        }
+                        Column(
+                            Modifier.fillMaxWidth()
+                                .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 78.dp)
+                        ) {
+                            val label =
+                                if (selected != null)
+                                    "${if(weatherDate(selected.timeMillis,zone)==weatherDate(now,zone))"Today"else clock(selected.timeMillis,zone,"EEE")} ${units.hourText(selected.timeMillis,zone)} · forecast"
+                                else
+                                    forecast?.observation?.takeIf { it.tempF != null }?.let {
+                                        "Now · observed ${units.timeOf(it.timeMillis,zone)} ${clock(it.timeMillis,zone,"z")}${observationAge(it.timeMillis,now)} · ${place.name}"
+                                    } ?: if (temp != null) "Now · forecast · ${place.name}" else "Now · ${place.name}"
+                            WebText(label, 14f, weight = 500)
+                            WebText(
+                                degrees(temp, units),
+                                260f,
+                                52f,
+                                820,
+                                Modifier.padding(top = 6.dp)
+                                    .offset(x = (-10.4).dp)
+                                    // CSS permits negative leading; Compose otherwise retains the
+                                    // font's 269dp natural line box even with 239.2sp lineHeight.
+                                    .height(heroLineHeight)
+                                    .wrapContentHeight(Alignment.CenterVertically, unbounded = true)
+                                    .testTag("hero_temperature"),
+                                lineHeight = 239.2f,
+                                maxLines = 1,
+                                letterSpacing = -7.8f,
+                            )
+                            val headline = sourceHeadline(forecast, live, place, units, now)
+                            if (headline.isNotBlank())
+                                WebText(
+                                    headline,
+                                    20f,
+                                    92f,
+                                    500,
+                                    Modifier.padding(top = 22.dp),
+                                    lineHeight = 23f,
+                                )
+                            else if (forecast == null && !state.loading)
+                                WebText(
+                                    "Forecast unavailable. Try again in a moment.",
+                                    20f,
+                                    92f,
+                                    500,
+                                    Modifier.padding(top = 22.dp),
+                                    lineHeight = 23f,
+                                )
+                            if (live?.rain != null)
+                                LiveRainMinutes(
+                                    live,
+                                    zone,
+                                    Modifier.fillMaxWidth().padding(top = 14.dp),
+                                    units,
+                                )
+                            if (
+                                state.rainStatus != null &&
+                                    !state.loading &&
+                                    forecast != null &&
+                                    !showSavedStatus
+                            )
+                                WebText(
+                                    "Live precipitation unavailable",
+                                    11f,
+                                    modifier = Modifier.padding(top = 8.dp),
+                                )
+                        }
+                        Row(Modifier.fillMaxWidth().align(Alignment.BottomCenter)) {
+                            rows
+                                .take(24)
+                                .filterIndexed { index, _ -> index % 2 == 0 }
+                                .forEachIndexed { index, row ->
+                                    val active =
+                                        selectedTime?.let {
+                                            it >= row.timeMillis && it < row.timeMillis + WX_HOUR
+                                        } == true
+                                    val color = if (active) MaterialTheme.colorScheme.surface else ink
+                                    Column(
+                                        Modifier.weight(1f)
+                                            .background(
+                                                if (active) ink
+                                                else if (index % 2 == 0) ink.copy(alpha = .05f)
+                                                else Color.Transparent
+                                            )
+                                            .clickable(role = Role.Button) {
+                                                val time = if (index == 0) null else row.timeMillis
+                                                selectedTime = if (selectedTime == time) null else time
+                                                openDetail = null
+                                            }
+                                            .testTag("hour_strip_$index")
+                                            .padding(start = 6.dp, top = 8.dp, bottom = 10.dp)
+                                    ) {
+                                        WebText(
+                                            units.hourOf(row.timeMillis, zone),
+                                            11f,
+                                            weight = 500,
+                                            color = color,
+                                            maxLines = 1,
+                                        )
+                                        WebText(
+                                            degrees(row.tempF, units),
+                                            18f,
+                                            64f,
+                                            820,
+                                            color = color,
+                                            maxLines = 1,
+                                        )
+                                    }
+                                }
                         }
                     }
                 }
-            if (forecast != null) {
-                item(key = "spiral", contentType = "spiral") {
-                    WebTemperatureSpiral(
-                        state.history?.hours.orEmpty(),
-                        forecast.hours,
-                        forecast.observation,
-                        place,
-                        selectedTime,
-                        {
-                            selectedTime = it
-                            openDetail = null
-                        },
-                        units,
-                        zone,
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 8.dp),
-                        nowMillis = now,
-                    )
-                }
-                item(key = "conditions", contentType = "conditions") {
-                    WebConditionCells(
-                        forecast,
-                        place,
-                        units,
-                        selectedTime,
-                        ensemble,
-                        openDetail,
-                        { openDetail = it },
-                        Modifier.padding(horizontal = 16.dp).padding(top = 24.dp),
-                        now,
-                    )
-                }
-                if (rows.size >= 2)
-                    item(key = "hourly", contentType = "hourly") {
-                        WebHourlyChart(
-                            rows,
+                if (state.warnings.isNotEmpty())
+                    item(key = "warnings", contentType = "warnings") {
+                        Column(
+                            Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            state.warnings.forEach { warning ->
+                                SourceWarning(warning, zone, units, now)
+                            }
+                        }
+                    }
+                if (forecast != null) {
+                    item(key = "spiral", contentType = "spiral") {
+                        WebTemperatureSpiral(
+                            state.history?.hours.orEmpty(),
+                            forecast.hours,
+                            forecast.observation,
+                            place,
                             selectedTime,
                             {
                                 selectedTime = it
@@ -418,62 +420,92 @@ fun WebWeatherScreen(
                             },
                             units,
                             zone,
-                            ensemble,
-                            Modifier.padding(horizontal = 16.dp).padding(top = 52.dp),
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 8.dp),
                             nowMillis = now,
-                            place = place,
                         )
                     }
-                if (forecast.days.isNotEmpty())
-                    item(key = "daily", contentType = "daily") {
-                        WebDailyForecast(
+                    item(key = "conditions", contentType = "conditions") {
+                        WebConditionCells(
                             forecast,
+                            place,
                             units,
-                            Modifier.padding(horizontal = 16.dp).padding(top = 32.dp),
+                            selectedTime,
+                            ensemble,
+                            openDetail,
+                            { openDetail = it },
+                            Modifier.padding(horizontal = 16.dp).padding(top = 24.dp),
                             now,
                         )
                     }
-                item(key = "radar_plumes", contentType = "radar_plumes") {
-                    Column(
-                        Modifier.padding(horizontal = 16.dp).padding(top = 36.dp),
-                        verticalArrangement = Arrangement.spacedBy(28.dp),
-                    ) {
-                        CompactRadarPanel(
-                            state.settings.serverUrl,
-                            place,
-                            onOpenRadar,
-                            timeZone = zone,
-                        )
-                        CompactPlumes(
-                            state.settings.serverUrl,
-                            forecast.station,
-                            units,
-                            zone,
-                            { station ->
-                                selectedTime = null
-                                openDetail = null
-                                onFullPlumes(station)
-                            },
-                            networkAvailability = state.networkAvailability,
-                        )
-                    }
-                }
-                item(key = "sources", contentType = "sources") {
-                    val sources = buildList {
-                        forecast.observation?.let {
-                            add("Observed ${units.timeOf(it.timeMillis,zone)}, NOAA RTMA")
+                    if (rows.size >= 2)
+                        item(key = "hourly", contentType = "hourly") {
+                            WebHourlyChart(
+                                rows,
+                                selectedTime,
+                                {
+                                    selectedTime = it
+                                    openDetail = null
+                                },
+                                units,
+                                zone,
+                                ensemble,
+                                Modifier.padding(horizontal = 16.dp).padding(top = 52.dp),
+                                nowMillis = now,
+                                place = place,
+                            )
                         }
-                        forecast.sourceRun?.let { add("Hours: RRFS ${it.takeLast(2)}Z") }
-                        forecast.station?.let { add("Ensemble: REFS at ${it.id}") }
-                        forecast.dailySourceRun?.let { add("Days: NBM ${it.takeLast(2)}Z") }
+                    if (forecast.days.isNotEmpty())
+                        item(key = "daily", contentType = "daily") {
+                            WebDailyForecast(
+                                forecast,
+                                units,
+                                Modifier.padding(horizontal = 16.dp).padding(top = 32.dp),
+                                now,
+                            )
+                        }
+                    item(key = "radar_plumes", contentType = "radar_plumes") {
+                        Column(
+                            Modifier.padding(horizontal = 16.dp).padding(top = 36.dp),
+                            verticalArrangement = Arrangement.spacedBy(28.dp),
+                        ) {
+                            CompactRadarPanel(
+                                state.settings.serverUrl,
+                                place,
+                                onOpenRadar,
+                                timeZone = zone,
+                            )
+                            CompactPlumes(
+                                state.settings.serverUrl,
+                                forecast.station,
+                                units,
+                                zone,
+                                { station ->
+                                    selectedTime = null
+                                    openDetail = null
+                                    onFullPlumes(station)
+                                },
+                                networkAvailability = state.networkAvailability,
+                                refreshRevision = state.refreshRevision,
+                            )
+                        }
                     }
-                        .joinToString(" · ")
-                    Column(
-                        Modifier.padding(start = 16.dp, end = 16.dp, top = 28.dp, bottom = 28.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        WebText(sources, 12f, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        WebText("Radar map", 12f, modifier = Modifier.clickable { onOpenRadar() })
+                    item(key = "sources", contentType = "sources") {
+                        val sources = buildList {
+                            forecast.observation?.let {
+                                add("Observed ${units.timeOf(it.timeMillis,zone)}, NOAA RTMA · 2.5 km analysis")
+                            }
+                            forecast.sourceRun?.let { add("Hours: RRFS ${it.takeLast(2)}Z") }
+                            forecast.station?.let { add("Ensemble: REFS at ${it.id}") }
+                            forecast.dailySourceRun?.let { add("Days: NBM ${it.takeLast(2)}Z") }
+                        }
+                            .joinToString(" · ")
+                        Column(
+                            Modifier.padding(start = 16.dp, end = 16.dp, top = 28.dp, bottom = 28.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            WebText(sources, 12f, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            WebText("Radar map", 12f, modifier = Modifier.clickable { onOpenRadar() })
+                        }
                     }
                 }
             }

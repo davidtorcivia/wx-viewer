@@ -142,24 +142,33 @@ fun CompactPlumes(
     onFullPlumes: (String) -> Unit,
     modifier: Modifier = Modifier,
     networkAvailability: NetworkAvailability = NetworkAvailability.UNKNOWN,
+    refreshRevision: Int = 0,
 ) {
     if (station == null || (station.km ?: Double.POSITIVE_INFINITY) > 40) return
     var selected by rememberSaveable(station.id) { mutableStateOf(PlumeParameter.TEMPERATURE.name) }
     var userSelected by remember(station.id) { mutableStateOf(false) }
     var showSnow by remember(station.id) { mutableStateOf(false) }
     val parameter = PlumeParameter.valueOf(selected)
-    val cycle = remember { EnsembleCycle.latest("refs") }
+    val cycle = remember(refreshRevision) { EnsembleCycle.latest("refs") }
     var bundle by remember(serverUrl, station.id, selected) {
         mutableStateOf(EnsembleRepository.peek(serverUrl, station.id, "refs", cycle, parameter.api)
             ?.let { PlumeBundle(it, emptyList()) })
     }
     var pending by remember(serverUrl, station.id, selected) { mutableStateOf(bundle == null) }
+    var snowRefreshRevision by remember(serverUrl, station.id) {
+        mutableIntStateOf(refreshRevision)
+    }
+    var bundleRefreshRevision by remember(serverUrl, station.id, parameter) {
+        mutableIntStateOf(refreshRevision)
+    }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    LaunchedEffect(lifecycle, serverUrl, station.id, cycle, networkAvailability) {
+    LaunchedEffect(lifecycle, serverUrl, station.id, cycle, networkAvailability, refreshRevision) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            val force = snowRefreshRevision != refreshRevision
+            snowRefreshRevision = refreshRevision
             try {
                 EnsembleRepository.observe(serverUrl, station.id, "refs", cycle, "Total-SNO",
-                    allowPreviousCycle = true)
+                    force = force, allowPreviousCycle = true)
                     .collect { d ->
                         showSnow = (d.mean.mapNotNull { it.p90 } + d.rrfs.map { it.value })
                             .any { it >= .1 }
@@ -170,8 +179,11 @@ fun CompactPlumes(
             catch (_: Exception) { /* Optional snow discovery should not hide other cached charts. */ }
         }
     }
-    LaunchedEffect(lifecycle, serverUrl, station.id, parameter, cycle, networkAvailability) {
+    LaunchedEffect(lifecycle, serverUrl, station.id, parameter, cycle, networkAvailability,
+        refreshRevision) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            val force = bundleRefreshRevision != refreshRevision
+            bundleRefreshRevision = refreshRevision
             pending = bundle == null
             val loaded = arrayOfNulls<EnsembleData>(3)
             fun publish() {
@@ -190,6 +202,7 @@ fun CompactPlumes(
                         try {
                             EnsembleRepository.observe(serverUrl, station.id, "refs",
                                 cycle.previous(index), parameter.api,
+                                force = force && index == 0,
                                 allowPreviousCycle = index == 0).collect { data ->
                                 loaded[index] = data
                                 publish()
@@ -253,13 +266,14 @@ fun CompactPlumes(
             else {
                 val first = mean.first().timeMillis
                 val last = mean.last().timeMillis
-                var cursor by
-                    remember(b, parameter) {
+                var selectedCursor by
+                    rememberSaveable(serverUrl, station.id, parameter.name) {
                         mutableLongStateOf(
                             snapPlumeTime(System.currentTimeMillis() + 21 * ENSEMBLE_HOUR)
                                 .coerceIn(first, last)
                         )
                     }
+                val cursor = selectedCursor.coerceIn(first, last)
                 val data =
                     remember(b, mean) {
                         b.current.copy(
@@ -318,7 +332,7 @@ fun CompactPlumes(
                     timeZone,
                     b.previous,
                     cursor,
-                    { cursor = it },
+                    { selectedCursor = it },
                     compact = true,
                     modifier = Modifier.padding(top = 6.dp),
                 )

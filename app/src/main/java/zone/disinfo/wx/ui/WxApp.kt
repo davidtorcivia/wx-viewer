@@ -184,6 +184,20 @@ fun WxApp(
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var locationConsent by rememberSaveable { mutableStateOf(false) }
     var handledNotification by rememberSaveable { mutableIntStateOf(0) }
+    LaunchedEffect(
+        lifecycle, page, showSettings, showSearch,
+        state.place?.id, state.place?.lat, state.place?.lon, state.settings.serverUrl,
+    ) {
+        if (page != "Weather" || showSettings || showSearch || state.place == null) return@LaunchedEffect
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (isActive) {
+                delay(model.visibleWeatherRefreshDelayMillis())
+                model.refreshVisibleWeather()
+                // Failure has no new fetchedAt. Keep retrying at the same restrained cadence.
+                delay(WxViewModel.VISIBLE_REFRESH_MILLIS)
+            }
+        }
+    }
     val placeScroll = rememberLazyListState()
     LaunchedEffect(state.notificationNavigation) {
         if (state.notificationNavigation > handledNotification) {
@@ -239,6 +253,9 @@ fun WxApp(
                                             state.forecast?.observation?.tempF
                                                 ?: state.placeTemperatures[place.id]
                                         else state.placeTemperatures[place.id]
+                                    val temperatureLabel =
+                                        if (selected) state.forecast?.temperatureLabel(state.cached)
+                                        else state.placeTemperatureLabels[place.id]
                                     val color = if (selected) paper else ink
                                     Row(
                                         Modifier.height(40.dp)
@@ -266,7 +283,8 @@ fun WxApp(
                                         )
                                         temp?.let {
                                             WebText(
-                                                degrees(it, state.settings.displayUnits),
+                                                degrees(it, state.settings.displayUnits) +
+                                                    (temperatureLabel?.let { label -> " · $label" } ?: ""),
                                                 18f,
                                                 70f,
                                                 700,
@@ -405,7 +423,7 @@ fun WxApp(
                         else ->
                             WebWeatherScreen(
                                 state,
-                                model::refresh,
+                                model::refreshFromGesture,
                                 onOpenRadar = {
                                     radarLayer = null
                                     radarTime = null

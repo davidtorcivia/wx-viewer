@@ -56,9 +56,11 @@ internal fun weatherCondition(row: WeatherHour?, night: Boolean): String {
     return weatherSky(row.cloud, night)
 }
 
-internal fun observationRow(forecast: Forecast): WeatherHour? {
-    val first =
-        weatherRowAt(forecast.hours, System.currentTimeMillis()) ?: forecast.hours.firstOrNull()
+internal fun observationRow(
+    forecast: Forecast, now: Long = System.currentTimeMillis(),
+): WeatherHour? {
+    // An expired first forecast hour must never masquerade as current weather.
+    val first = weatherRowAt(forecast.hours, now)
     return forecast.observation?.let { o ->
         WeatherHour(
             o.timeMillis,
