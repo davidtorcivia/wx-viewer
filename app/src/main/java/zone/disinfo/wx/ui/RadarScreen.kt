@@ -408,7 +408,7 @@ private fun RadarView(
         val which = session.overlay
         val range = session.effectiveRange
         while (isActive) {
-            loading = session.frames.frames.isEmpty() && session.savedView == null
+            loading = session.frames.frames.isEmpty() && !session.showingSavedView
             try {
                 val result = loadRadarFrames(serverUrl, which, range)
                 if (result.frames.isEmpty())
@@ -1279,6 +1279,11 @@ private fun NativeRadarMap(
                 addView(particles, android.widget.FrameLayout.LayoutParams(-1, -1))
                 controller.attachParticles(particles)
             }
+        },
+        update = {
+            // AndroidView's Compose description is not exported when the native map owns
+            // accessibility. Give the actual MapView its place-specific label and gestures.
+            mapView.contentDescription = "Interactive weather map centered near ${place.name}. Scroll by dragging two fingers. Zoom by pinching two fingers."
         },
         modifier =
             modifier.semantics {
