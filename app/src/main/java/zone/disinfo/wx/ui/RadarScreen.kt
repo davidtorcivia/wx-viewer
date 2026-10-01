@@ -131,6 +131,20 @@ internal data class RadarFrame(
         }
 }
 
+/** Shared production source construction, covered by device and minified-preview tests. */
+internal fun radarTileSet(base: String, frame: RadarFrame): TileSet =
+    TileSet("2.2.0", frame.tileUrl(base)).apply {
+        setMinZoom(3f)
+        setMaxZoom(frame.maxZoom)
+        if (frame.field != null) {
+            // MapLibre 11.8.0's four-Float overload calls itself forever. An explicit
+            // primitive-array spread selects the safe vararg overload instead.
+            setBounds(*floatArrayOf(-134f, 21f, -61f, 53f))
+        }
+        attribution = if (frame.satellite) "NOAA / LibreWXR"
+            else "NOAA MRMS / NEXRAD / LibreWXR"
+    }
+
 internal fun isRadarNowcastFresh(scanTime: Long, now: Long): Boolean = now - scanTime in -120L..600L
 
 internal data class RadarFrames(
@@ -323,6 +337,11 @@ private fun RadarView(
     }
     LaunchedEffect(initialLayer, initialTimeSeconds) {
         if (initialLayer != null && initialLayer in radarOverlays) {
+            if (session.overlay != initialLayer) {
+                session.frames = RadarFrames(emptyList())
+                session.inspection = null
+                session.time = 0.0
+            }
             session.overlay = initialLayer!!
             if (initialTimeSeconds != null)
                 session.range =
@@ -1091,7 +1110,8 @@ private fun RadarLegend(
 }
 
 @Composable
-private fun RadarScale(field: RadarFieldLegend?, overlay: String, snow: Boolean, compact: Boolean) {
+private fun RadarScale(legend: RadarFieldLegend?, overlay: String, snow: Boolean, compact: Boolean) {
+    val field = legend?.takeIf { it.stops.size >= 2 && it.stops.all { stop -> stop.first.isFinite() } }
     if (field == null && overlay == "satellite") return
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val rainColors =
@@ -1732,15 +1752,7 @@ private class NativeRadarController(
             for (frame in visible) {
                 val id = "wx-${frame.key}"
                 if (s.getLayer(id) == null) {
-                    val tileSet =
-                        TileSet("2.2.0", frame.tileUrl(base)).apply {
-                            setMinZoom(3f)
-                            setMaxZoom(frame.maxZoom)
-                            if (frame.field != null) setBounds(-134f, 21f, -61f, 53f)
-                            attribution =
-                                if (frame.satellite) "NOAA / LibreWXR"
-                                else "NOAA MRMS / NEXRAD / LibreWXR"
-                        }
+                    val tileSet = radarTileSet(base, frame)
                     s.addSource(
                         RasterSource(
                             "$id-source",
@@ -2261,6 +2273,9 @@ private class NativeRadarController(
             updateNumbers()
             return
         }
+        // Never keep labels or wind particles from a different frame while its grid loads.
+        grid = null
+        updateNumbers()
         val server = base
         gridJob = scope.launch {
             try {
@@ -2281,6 +2296,23 @@ private class NativeRadarController(
     }
 
     private fun updateNumbers() {
+        if (disposed) return
+        try {
+            updateNumbersSafely()
+        } catch (e: Exception) {
+            Log.w(RADAR_LOG_TAG, "Weather labels unavailable for ${current?.field}", e)
+            clearNumbers()
+        }
+    }
+
+    private fun clearNumbers() {
+        runCatching {
+            style?.getSourceAs<GeoJsonSource>("wx-numbers")
+                ?.setGeoJson("{\"type\":\"FeatureCollection\",\"features\":[]}")
+        }
+    }
+
+    private fun updateNumbersSafely() {
         numbersJob?.cancel()
         val request = ++numbersRequest
         val s = style ?: return
@@ -2332,6 +2364,7 @@ private class NativeRadarController(
         val pxPerDegree = 512 * 2.0.pow(ready.cameraPosition.zoom) / 360
         val step = 2.0.pow(round(log2(240 / pxPerDegree)))
         numbersJob = scope.launch {
+            try {
             val json =
                 withContext(Dispatchers.Default) {
                     val features = JSONArray()
@@ -2372,6 +2405,13 @@ private class NativeRadarController(
             if (!disposed && style === s && grid === values && request == numbersRequest) {
                 applyNumbers(s, json)
             }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Field labels are optional; a bad annotation must not crash the map or app.
+                Log.w(RADAR_LOG_TAG, "Weather labels unavailable for ${current?.field}", e)
+                if (!disposed && style === s && request == numbersRequest) clearNumbers()
+            }
         }
     }
 
@@ -2383,7 +2423,11 @@ private class NativeRadarController(
             val fonts =
                 s.layers
                     .filterIsInstance<SymbolLayer>()
-                    .mapNotNull { it.textFont.value }
+                    .mapNotNull { layer ->
+                        val raw: Any? = layer.textFont.value
+                        (raw as? Array<*>)?.mapNotNull { it as? String }
+                            ?.takeIf { it.isNotEmpty() }?.toTypedArray()
+                    }
                     .filter { font -> font.none { it.contains("italic", ignoreCase = true) } }
             val font =
                 fonts.firstOrNull { it.any { it.contains("bold", ignoreCase = true) } }

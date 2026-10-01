@@ -20,20 +20,24 @@ internal data class RadarFieldLegend(
     val squareRoot: Boolean = false,
 ) {
     fun fraction(value: Double): Float {
+        if (!value.isFinite()) return 0f
         fun transform(v: Double) = if (squareRoot) sqrt(v.coerceAtLeast(0.0)) else v
         val lo = transform(stops.firstOrNull()?.first ?: 0.0)
         val hi = transform(stops.lastOrNull()?.first ?: 1.0)
-        return ((transform(value) - lo) / (hi - lo).coerceAtLeast(.0001)).toFloat().coerceIn(0f, 1f)
+        val fraction = (transform(value) - lo) / (hi - lo).coerceAtLeast(.0001)
+        return if (fraction.isFinite()) fraction.toFloat().coerceIn(0f, 1f) else 0f
     }
 
     fun color(value: Double): Int {
         if (stops.isEmpty()) return Color.GRAY
+        if (!value.isFinite()) return stops.first().second
         val right =
             stops.indexOfFirst { it.first >= value }.let { if (it < 0) stops.lastIndex else it }
         val left = (right - 1).coerceAtLeast(0)
         val (a, ca) = stops[left]
         val (b, cb) = stops[right]
-        val f = if (a == b) 0.0 else ((value - a) / (b - a)).coerceIn(0.0, 1.0)
+        val ratio = if (a == b) 0.0 else (value - a) / (b - a)
+        val f = if (ratio.isFinite()) ratio.coerceIn(0.0, 1.0) else 0.0
         fun mix(x: Int, y: Int) = (x + (y - x) * f).roundToInt()
         return Color.argb(
             mix(Color.alpha(ca), Color.alpha(cb)),
@@ -54,10 +58,24 @@ internal data class RadarGridMeta(
     val suffix: String,
     val peak: Boolean,
     val uv: Boolean,
-)
+) {
+    /** Bound untrusted metadata before allocation, interpolation, or native drawing. */
+    fun expectedByteCount(): Int? {
+        if (!west.isFinite() || west !in -180.0..180.0 ||
+            !north.isFinite() || north !in -90.0..90.0 ||
+            !step.isFinite() || step <= 0.0 || step > 180.0 ||
+            !scale.isFinite() || scale <= 0.0 || nx < 2 || ny < 2) return null
+        val count = nx.toLong() * ny.toLong() * (if (uv) 2L else 1L)
+        return count.takeIf { it in 1..16L * 1024 * 1024 }?.toInt()
+    }
+}
 
 internal data class RadarGrid(val meta: RadarGridMeta, val bytes: ByteArray) {
+    init { require(meta.expectedByteCount() == bytes.size) { "Invalid weather grid" } }
+
     fun value(lon: Double, lat: Double, layer: Int = 0): Double? {
+        if (!lon.isFinite() || !lat.isFinite() || layer !in 0 until (if (meta.uv) 2 else 1))
+            return null
         val x = (lon - meta.west) / meta.step
         val y = (meta.north - lat) / meta.step
         val c = floor(x + 1e-9).toInt()
@@ -76,6 +94,7 @@ internal data class RadarGrid(val meta: RadarGridMeta, val bytes: ByteArray) {
     }
 
     fun standout(lon: Double, lat: Double, size: Double): Pair<Double, Double>? {
+        if (!lon.isFinite() || !lat.isFinite() || !size.isFinite() || size <= 0.0) return null
         val c0 = max(0, ceil((lon - meta.west) / meta.step).toInt())
         val c1 = min(meta.nx - 2, floor((lon + size - meta.west) / meta.step - 1e-9).toInt())
         val r0 = max(0, ceil((meta.north - lat - size) / meta.step + 1e-9).toInt())
@@ -121,10 +140,11 @@ internal data class RadarGrid(val meta: RadarGridMeta, val bytes: ByteArray) {
 
     fun scalar(lon: Double, lat: Double): Double? {
         val a = value(lon, lat) ?: return null
-        return if (meta.uv) {
+        val result = if (meta.uv) {
             val b = value(lon, lat, 1) ?: return null
             hypot(a, b) / 2 * 2.23694
         } else a / meta.scale
+        return result.takeIf { it.isFinite() }
     }
 
     fun label(lon: Double, lat: Double): String? {
@@ -140,29 +160,29 @@ internal suspend fun loadRadarGrid(base: String, frame: RadarFrame): RadarGrid? 
     val meta = frame.grid ?: return null
     val url = "$base/api/radar/field/${frame.field}/grid.bin?v=3"
     val raw = RadarAssetCache.get(url) { radarBinary(url) }
-    val decoded =
-        withContext(Dispatchers.Default) {
-            val bytes =
-                GZIPInputStream(ByteArrayInputStream(raw)).use { stream ->
-                    val output = ByteArrayOutputStream()
-                    val buffer = ByteArray(8192)
-                    while (true) {
-                        currentCoroutineContext().ensureActive()
-                        val count = stream.read(buffer)
-                        if (count < 0) break
-                        if (output.size() + count > 16 * 1024 * 1024)
-                            throw IOException("Weather grid is too large")
-                        output.write(buffer, 0, count)
-                    }
-                    output.toByteArray()
-                }
-            if (bytes.size != meta.nx * meta.ny * (if (meta.uv) 2 else 1))
-                throw IOException("Weather grid is incomplete")
-            for (i in 1 until bytes.size) bytes[i] = (bytes[i] + bytes[i - 1]).toByte()
-            bytes
-        }
-    return RadarGrid(meta, decoded)
+    return decodeRadarGrid(raw, meta)
 }
+
+internal suspend fun decodeRadarGrid(raw: ByteArray, meta: RadarGridMeta): RadarGrid =
+    withContext(Dispatchers.Default) {
+        val expected = meta.expectedByteCount() ?: throw IOException("Invalid weather grid metadata")
+        val bytes = GZIPInputStream(ByteArrayInputStream(raw)).use { stream ->
+            val output = ByteArrayOutputStream(expected)
+            val buffer = ByteArray(8192)
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                val count = stream.read(buffer)
+                if (count < 0) break
+                if (output.size().toLong() + count > expected)
+                    throw IOException("Weather grid is too large")
+                output.write(buffer, 0, count)
+            }
+            output.toByteArray()
+        }
+        if (bytes.size != expected) throw IOException("Weather grid is incomplete")
+        for (i in 1 until bytes.size) bytes[i] = (bytes[i] + bytes[i - 1]).toByte()
+        RadarGrid(meta, bytes)
+    }
 
 internal suspend fun radarBinary(url: String): ByteArray =
     fetchRadarAsset(url, 16 * 1024 * 1024, "application/octet-stream").bytes
@@ -170,19 +190,23 @@ internal suspend fun radarBinary(url: String): ByteArray =
 internal fun parseRadarLegend(json: JSONObject?): RadarFieldLegend? {
     json ?: return null
     val stops = json.optJSONArray("stops") ?: return null
-    val colors =
-        (0 until stops.length()).mapNotNull { i ->
-            val stop = stops.optJSONArray(i) ?: return@mapNotNull null
-            val rgba = stop.optJSONArray(1) ?: return@mapNotNull null
-            stop.optDouble(0) to
-                Color.argb(rgba.optInt(3, 255), rgba.optInt(0), rgba.optInt(1), rgba.optInt(2))
-        }
+    val colors = (0 until stops.length()).mapNotNull { i ->
+        val stop = stops.optJSONArray(i) ?: return@mapNotNull null
+        val value = stop.optDouble(0)
+        if (!value.isFinite()) return@mapNotNull null
+        val rgba = stop.optJSONArray(1) ?: return@mapNotNull null
+        if (rgba.length() < 3) return@mapNotNull null
+        val channels = (0..2).map { rgba.optDouble(it) }
+        if (channels.any { !it.isFinite() }) return@mapNotNull null
+        val alpha = if (rgba.length() > 3) rgba.optDouble(3) else 255.0
+        if (!alpha.isFinite()) return@mapNotNull null
+        value to Color.argb(alpha.toInt().coerceIn(0, 255),
+            channels[0].toInt().coerceIn(0, 255), channels[1].toInt().coerceIn(0, 255),
+            channels[2].toInt().coerceIn(0, 255))
+    }.sortedBy { it.first }.distinctBy { it.first }
+    if (colors.size < 2) return null
     val ticks = json.optJSONArray("ticks")
-    return RadarFieldLegend(
-        colors,
-        (0 until (ticks?.length() ?: 0)).map { ticks!!.optDouble(it) },
-        json.optString("unit"),
-        json.optString("label"),
-        json.optBoolean("sqrt"),
-    )
+    return RadarFieldLegend(colors,
+        (0 until (ticks?.length() ?: 0)).map { ticks!!.optDouble(it) }.filter { it.isFinite() },
+        json.optString("unit"), json.optString("label"), json.optBoolean("sqrt"))
 }
