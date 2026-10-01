@@ -29,6 +29,22 @@ grep -q 'OK (1 test)' "$output/seed.log" || { cat "$output/seed.log"; exit 1; }
 seed_pid=$(sed -n 's/^INSTRUMENTATION_STATUS: wxSeedPid=//p' "$output/seed.log" | tr -d '\r' | tail -n 1)
 [[ "$seed_pid" =~ ^[0-9]+$ ]] || { echo "Seed process ID missing" >&2; exit 1; }
 adb pull "$seed_remote/." "$output/seed/" || true
+# Inspect the actual persisted document after the seed process has exited. This prevents a
+# successful in-memory seed from being mistaken for an offline startup regression. The app is
+# still the debuggable fixture build here; no root access or preview data-access bypass is used.
+adb shell am force-stop zone.disinfo.wx
+adb exec-out run-as zone.disinfo.wx cat shared_prefs/wx_settings_v1.xml > "$output/seed/settings-after-process.xml"
+adb exec-out run-as zone.disinfo.wx ls -l files/display-cache-v1 > "$output/seed/cache-files-after-process.txt"
+python3 - "$output/seed/settings-after-process.xml" <<'PY'
+import json, sys, xml.etree.ElementTree as ET
+root = ET.parse(sys.argv[1]).getroot()
+raw = root.find("string[@name='settings']")
+assert raw is not None and raw.text, "No persisted settings after seed process exit"
+settings = json.loads(raw.text)
+assert settings['serverUrl'] == 'https://wx-offline-preview-fixture.invalid', settings
+assert [(p['id'], p['name']) for p in settings['places']] == [('offline-nyc', 'NYC'), ('offline-boston', 'Boston')], settings
+print('Verified persisted fixture origin and both places after seed process exit')
+PY
 adb install -r "$preview_apk"
 bash "$(dirname "$0")/verify-preview-apk.sh" "$preview_apk" > "$output/preview-package-verification.txt"
 adb install -r -t "$external_tests"
