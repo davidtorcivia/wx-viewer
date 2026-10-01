@@ -106,4 +106,5 @@ jobs:
           path: |
             app/build/outputs/offline-preview/
             app/build/outputs/radar-offline-phases/
+            app/build/outputs/radar-layers-preview/
           if-no-files-found: ignore
