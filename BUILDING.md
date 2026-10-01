@@ -46,6 +46,50 @@ the end-to-end suite and saves `android-e2e-reports`. Run end-to-end instrumenta
 app into `app/build/outputs/e2e/`. Reports are saved to
 `app/build/reports/androidTests/connected/`.
 
+## User-delivery preview signing
+
+Ordinary `:app:assemblePreview` and CI's `wx-viewer-release-like-ci-key`
+artifact use the executor's debug key. They are **not user-delivery signing**.
+Never deliver those APKs as updates to an installed user preview.
+
+Build a fixture-free, minified delivery preview with the existing, approved key:
+
+```sh
+bash scripts/build-delivery-preview.sh \
+  --keystore /outside/this/repo/wx-delivery.keystore \
+  --alias EXISTING_ALIAS \
+  --password-file /outside/this/repo/wx-delivery-password.txt
+```
+
+Alternatively set `WX_DELIVERY_KEYSTORE`, `WX_DELIVERY_KEY_ALIAS`, and
+`WX_DELIVERY_PASSWORD_FILE`. The password file's first line supplies the store
+and key password; use `--key-password-file` or `WX_DELIVERY_KEY_PASSWORD_FILE`
+if the key password differs. Keep both files private and outside the repository.
+Never place password values in command arguments, logs, or source control.
+The wrapper also requires `realpath`, JDK `keytool`, and Android Build Tools 35.0.0.
+
+The approved replacement certificate for `zone.disinfo.wx` is pinned as SHA-256:
+
+```text
+ecdad3121f0fc4eb78d4baee3fe0216cf57127098a038eef7c9b64afef07c270
+```
+
+The wrapper checks that certificate before Gradle runs, applies signing through
+a temporary init script, and verifies the APK's signer, application ID,
+minification output, and absence of benchmark fixtures. It builds separately
+from CI's raw preview, disables configuration/build caches and build scans, and
+removes its temporary build and signing override afterward. Only a successful
+run replaces `app/build/outputs/apk/delivery-preview/wx-viewer-preview.apk`;
+if a run fails, do not mistake an older file there for a newly verified build.
+
+**Missing key means stop.** Recover the approved key and password from a durable,
+user-controlled backup before retrying. The wrapper never creates a fallback
+key or accepts a different certificate. A duplicate on the same cloud computer
+is not a durable backup against resets. Replacing a lost key requires explicit
+user approval, updating this public pin, and a reinstall that can lose the app's
+settings and local data. Do not rotate it silently. Keep CI's runner-generated
+key separate from the delivery key.
+
 ## Version and license references
 
 - [AGP 8.9 compatibility](https://developer.android.com/build/releases/agp-8-9-0-release-notes)
