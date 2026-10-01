@@ -4,6 +4,19 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [[ $(adb shell getprop ro.kernel.qemu | tr -d '\r') == 1 ]] || { echo 'Disposable emulator required'; exit 2; }
+original_animator=$(adb shell settings get global animator_duration_scale | tr -d '\r')
+original_airplane=$(adb shell settings get global airplane_mode_on | tr -d '\r')
+original_wifi=$(adb shell settings get global wifi_on | tr -d '\r')
+original_data=$(adb shell settings get global mobile_data | tr -d '\r')
+restore_emulator() {
+ adb shell settings put global animator_duration_scale "$original_animator" || true
+ adb shell cmd connectivity airplane-mode "$([[ "$original_airplane" == 1 ]] && echo enable || echo disable)" || true
+ adb shell svc wifi "$([[ "$original_wifi" == 1 || "$original_wifi" == 2 ]] && echo enable || echo disable)" || true
+ adb shell svc data "$([[ "$original_data" == 1 ]] && echo enable || echo disable)" || true
+}
+trap restore_emulator EXIT INT TERM
+# Wind particles intentionally obey Android's animator setting; exercise them enabled.
+adb shell settings put global animator_duration_scale 1
 output=app/build/outputs/radar-layers-preview
 mkdir -p "$output"
 adb install -r app/build/outputs/apk/debug/app-debug.apk
@@ -28,7 +41,7 @@ adb logcat -c
 remote=/sdcard/Android/media/zone.disinfo.wx.macrobenchmark/radar-layers-preview
 set +e
 timeout 900 adb shell am instrument -w -r \
- -e class zone.disinfo.wx.macrobenchmark.RadarLayersPreviewTest \
+ -e class zone.disinfo.wx.macrobenchmark.RadarLayersPreviewTest#allLiveLayersRangesInteractionsAndLifecycle \
  -e wxRadarLayersPreview true -e additionalTestOutputDir "$remote" \
  zone.disinfo.wx.macrobenchmark/androidx.test.runner.AndroidJUnitRunner > "$output/instrumentation.log" 2>&1
 status=$?
@@ -40,3 +53,23 @@ if [[ $status -ne 0 ]] || ! grep -q 'OK (1 test)' "$output/instrumentation.log";
  grep -A 35 -B 2 -E 'FATAL EXCEPTION|Fatal signal' "$output/logcat.txt" || true
  exit 1
 fi
+
+# Exercise every layer/range against saved data with real connectivity disabled, then
+# repeat from empty app storage. The offline test restores initial radio settings.
+for state in saved empty; do
+ if [[ "$state" == empty ]]; then adb shell pm clear zone.disinfo.wx; fi
+ remote=/sdcard/Android/media/zone.disinfo.wx.macrobenchmark/radar-layers-offline-$state
+ set +e
+ timeout 300 adb shell am instrument -w -r \
+  -e class zone.disinfo.wx.macrobenchmark.RadarLayersPreviewTest#allLayersRemainResponsiveOffline \
+  -e wxRadarLayersOffline true -e additionalTestOutputDir "$remote" \
+  zone.disinfo.wx.macrobenchmark/androidx.test.runner.AndroidJUnitRunner > "$output/offline-$state.log" 2>&1
+ status=$?
+ set -e
+ adb pull "$remote/." "$output/offline-$state/" || true
+ adb logcat -d > "$output/offline-$state-logcat.txt" || true
+ if [[ $status -ne 0 ]] || ! grep -q 'OK (1 test)' "$output/offline-$state.log"; then
+  cat "$output/offline-$state.log"
+  exit 1
+ fi
+done
