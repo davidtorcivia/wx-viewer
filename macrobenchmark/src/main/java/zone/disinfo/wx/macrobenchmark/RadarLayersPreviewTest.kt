@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.os.SystemClock
+import android.os.Bundle
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -11,6 +12,9 @@ import androidx.test.uiautomator.BySelector
 import androidx.test.uiautomator.Configurator
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
+import androidx.test.uiautomator.UiScrollable
+import androidx.test.uiautomator.UiSelector
+import androidx.test.uiautomator.Until
 import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
@@ -63,15 +67,23 @@ class RadarLayersPreviewTest {
                             device.findObject(By.desc("Pause animation"))?.click()
                             device.findObject(By.desc("Play animation"))?.click()
                             await(By.desc("Animation speed")).click()
+                            val foregroundPid = shell("pidof $target")
                             device.pressHome()
                             SystemClock.sleep(400)
                             launch()
                             assertAlive()
+                            check(shell("pidof $target") == foregroundPid) {
+                                "Background/resume restarted the $layer process"
+                            }
+                            await(By.text("$layer ▾"))
                         }
                         screenshot("${slug(layer)}-$range")
                         results.put(JSONObject().put("layer", layer).put("rangeIndex", range)
                             .put("range", await(By.desc("Time range")).text)
                             .put("result", "passed").put("pid", shell("pidof $target")))
+                        instrumentation.sendStatus(0, Bundle().apply {
+                            putString("wxRadarLayer", "$layer ${await(By.desc("Time range")).text}: passed")
+                        })
                         await(By.desc("Time range")).click()
                     }
                 } catch (failure: Throwable) {
@@ -132,6 +144,9 @@ class RadarLayersPreviewTest {
                     screenshot("offline-${slug(layer)}-$range")
                     results.put(JSONObject().put("layer", layer).put("rangeIndex", range)
                         .put("offline", true).put("result", "passed"))
+                    instrumentation.sendStatus(0, Bundle().apply {
+                        putString("wxRadarLayer", "offline $layer ${await(By.desc("Time range")).text}: passed")
+                    })
                     await(By.desc("Time range")).click()
                 }
             }
@@ -162,23 +177,28 @@ class RadarLayersPreviewTest {
             SystemClock.sleep(200)
         } while (SystemClock.elapsedRealtime() < end)
         check(device.findObjects(By.text("Loading…")).isEmpty()) { "$layer metadata timed out" }
+        device.findObject(By.desc("Pause animation"))?.click()
         SystemClock.sleep(5_000)
         assertAlive()
         check(device.findObjects(By.textContains("unavailable")).isEmpty()) { "$layer tiles unavailable" }
+        check(device.findObjects(By.descContains("Last viewed area only. Alerts are not saved.")).isEmpty()) {
+            "$layer still shows a saved fallback rather than live imagery"
+        }
     }
 
     private fun select(label: String) {
         device.findObject(By.desc("Expand radar legend"))?.click()
         await(By.textEndsWith(" ▾")).click()
-        var choice = device.findObject(By.text(label))
-        repeat(3) {
-            if (choice == null || choice!!.visibleBounds.height() == 0) {
-                device.swipe(device.displayWidth / 3, device.displayHeight * 3 / 4,
-                    device.displayWidth / 3, device.displayHeight / 3, 20)
-                choice = device.findObject(By.text(label))
-            }
+        // The popup is a scrollable Compose menu. Wait for it, and scroll its actual bounds;
+        // a screen-relative swipe can land below the popup and dismiss it instead.
+        await(By.scrollable(true))
+        val menu = UiScrollable(UiSelector().scrollable(true)).setAsVerticalList()
+        check(menu.scrollIntoView(UiSelector().text(label))) { "Missing layer menu item $label" }
+        val choice = await(By.text(label)) {
+            it.visibleBounds.centerY() < device.displayHeight * .85
         }
-        checkNotNull(choice) { "Missing layer menu item $label" }.click()
+        choice.click()
+        check(device.wait(Until.gone(By.scrollable(true)), 5_000)) { "Layer menu did not close" }
         await(By.text("$label ▾"))
     }
 
