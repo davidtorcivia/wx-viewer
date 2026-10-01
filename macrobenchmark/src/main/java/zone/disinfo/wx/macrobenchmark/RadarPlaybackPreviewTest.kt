@@ -657,7 +657,7 @@ class RadarPlaybackPreviewTest {
     }
 
     private fun scrub(fraction: Float) {
-        val bounds = await(By.res("radar_scrubber")).visibleBounds
+        val bounds = await(By.res("radar_slider_track")).visibleBounds
         emitDiagnostic("wxPhysicalSeek", "tap request=$fraction bounds=$bounds before=${seekPercentage()} stamp=${stamp()}")
         check(device.click(bounds.left + (bounds.width() * fraction).toInt(), bounds.centerY())) {
             "Physical seek input could not be injected"
@@ -702,7 +702,7 @@ class RadarPlaybackPreviewTest {
     }
     private fun dragScrubber(from: Float, to: Float) {
         play()
-        val bounds = await(By.res("radar_scrubber")).visibleBounds
+        val bounds = await(By.res("radar_slider_track")).visibleBounds
         check(device.swipe(bounds.left + (bounds.width() * from).toInt(), bounds.centerY(),
             bounds.left + (bounds.width() * to).toInt(), bounds.centerY(), 30))
         await(By.desc("Play animation"))
