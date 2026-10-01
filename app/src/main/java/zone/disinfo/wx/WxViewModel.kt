@@ -14,6 +14,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -30,6 +32,8 @@ data class WxState(
     val rainNowcast: RainNowcast? = null,
     val rainStatus: String? = null,
     val loading: Boolean = false,
+    val refreshing: Boolean = false,
+    val refreshRevision: Int = 0,
     val cached: Boolean = false,
     val error: String? = null,
     val searching: Boolean = false,
@@ -39,6 +43,7 @@ data class WxState(
     val permissionRevision: Int = 0,
     val notificationNavigation: Int = 0,
     val placeTemperatures: Map<String, Double?> = emptyMap(),
+    val placeTemperatureLabels: Map<String, String?> = emptyMap(),
     val networkAvailability: NetworkAvailability = NetworkAvailability.UNKNOWN,
     val clearingCache: Boolean = false,
     val cacheClearStatus: String? = null,
@@ -50,6 +55,7 @@ data class WxState(
 }
 
 class WxViewModel(application: Application) : AndroidViewModel(application) {
+    companion object { internal const val VISIBLE_REFRESH_MILLIS = 5 * 60_000L }
     private val store = SettingsStore(application)
     private val initial = store.load()
     var state by
@@ -62,7 +68,10 @@ class WxViewModel(application: Application) : AndroidViewModel(application) {
         )
         private set
 
+    private data class LoadTarget(val server: String, val id: String, val lat: Double, val lon: Double)
+
     private var loadJob: Job? = null
+    private var loadTarget: LoadTarget? = null
     private var searchJob: Job? = null
     private var generation = 0
     private var rainGeneration = 0
@@ -90,7 +99,7 @@ class WxViewModel(application: Application) : AndroidViewModel(application) {
                     places.associate { place -> place.id to repository.cachedForecast(place) }
                 }
             val cached = snapshots.mapValues { (_, snapshot) ->
-                snapshot?.forecast?.let { it.observation?.tempF ?: it.hours.firstOrNull()?.tempF }
+                snapshot?.forecast?.let { it.currentTemperature() }
             }
             if (state.settings.serverUrl != server || state.places != places) return@launch
             val activeTemperature =
@@ -99,11 +108,15 @@ class WxViewModel(application: Application) : AndroidViewModel(application) {
                     ?.let {
                         mapOf(
                             selectedId.orEmpty() to
-                                (it.observation?.tempF ?: it.hours.firstOrNull()?.tempF)
+                                (it.currentTemperature())
                         )
                     }
                     .orEmpty()
-            state = state.copy(placeTemperatures = cached + activeTemperature)
+            state = state.copy(
+                placeTemperatures = cached + activeTemperature,
+                placeTemperatureLabels = snapshots.mapValues { it.value?.forecast?.temperatureLabel(true) } +
+                    activeTemperature.keys.associateWith { state.forecast?.temperatureLabel(state.cached) },
+            )
             if (
                 withContext(Dispatchers.IO) {
                     NetworkConnectivity.status(getApplication()) == NetworkAvailability.OFFLINE
@@ -122,23 +135,26 @@ class WxViewModel(application: Application) : AndroidViewModel(application) {
                     batch
                         .map { place ->
                             async {
-                                val value =
+                                val reading =
                                     try {
                                         repository.forecast(place, pollBuilding = false).let {
-                                            it.observation?.tempF ?: it.hours.firstOrNull()?.tempF
+                                            it.currentTemperature() to it.temperatureLabel(false)
                                         }
                                     } catch (e: CancellationException) {
                                         throw e
                                     } catch (_: Exception) {
-                                        cached[place.id]
+                                        cached[place.id] to "saved"
                                     }
-                                place.id to value
+                                Triple(place.id, reading.first, reading.second)
                             }
                         }
                         .awaitAll()
                 }
                 if (state.settings.serverUrl == server && state.places == places)
-                    state = state.copy(placeTemperatures = state.placeTemperatures + readings)
+                    state = state.copy(
+                        placeTemperatures = state.placeTemperatures + readings.associate { it.first to it.second },
+                        placeTemperatureLabels = state.placeTemperatureLabels + readings.associate { it.first to it.third },
+                    )
             }
         }
     }
@@ -164,13 +180,35 @@ class WxViewModel(application: Application) : AndroidViewModel(application) {
         refresh()
     }
 
-    fun refresh() {
+    fun refresh() = loadWeather(userInitiated = false)
+
+    /** Pulls and accessibility retries share the selected place's existing in-flight work. */
+    fun refreshFromGesture() = loadWeather(userInitiated = true)
+
+    private fun loadWeather(userInitiated: Boolean) {
         if (state.clearingCache) return
-        loadJob?.cancel()
-        refreshRain()
+        val place = state.place ?: run {
+            generation++
+            rainGeneration++
+            loadJob?.cancel()
+            rainJob?.cancel()
+            loadTarget = null
+            state = state.copy(loading = false, refreshing = false)
+            return
+        }
+        val target = LoadTarget(state.settings.serverUrl, place.id, place.lat, place.lon)
+        if (userInitiated && loadTarget == target && loadJob?.isActive == true) {
+            if (!state.refreshing) {
+                state = state.copy(refreshing = true, refreshRevision = state.refreshRevision + 1)
+            }
+            return
+        }
         val token = ++generation
-        val place = state.place ?: return
-        val repository = WeatherRepository(getApplication(), state.settings.serverUrl)
+        loadJob?.cancel()
+        loadTarget = target
+        refreshRain()
+        val activeRainRequest = rainJob
+        val repository = WeatherRepository(getApplication(), target.server)
         val hot = repository.peekCachedForecast(place)
         val retainedForecast =
             hot?.forecast
@@ -182,90 +220,146 @@ class WxViewModel(application: Application) : AndroidViewModel(application) {
                 forecast = retainedForecast,
                 cached = hot != null || retainedForecast != null && state.cached,
                 loading = true,
+                refreshing = userInitiated,
+                refreshRevision = state.refreshRevision + if (userInitiated) 1 else 0,
                 error = null,
-                warnings = emptyList(),
             )
         loadJob = viewModelScope.launch {
-            val cached =
-                hot
-                    ?: withContext(Dispatchers.IO) {
-                        repository.cachedForecast(place)
+            try {
+                coroutineScope {
+                    val cached =
+                        hot
+                            ?: withContext(Dispatchers.IO) {
+                                repository.cachedForecast(place)
+                            }
+                    if (token != generation) return@coroutineScope
+                    if (cached != null) {
+                        state = state.copy(forecast = cached.forecast, cached = true)
                     }
-            if (token != generation) return@launch
-            if (cached != null) {
-                state = state.copy(forecast = cached.forecast, cached = true)
-            }
-            launch {
-                val savedHistory = repository.cachedHistory(place)
-                if (token == generation && state.history == null && savedHistory != null) {
-                    state = state.copy(history = savedHistory)
-                }
-            }
-            val availability =
-                withContext(Dispatchers.IO) {
-                    NetworkConnectivity.status(getApplication())
-                }
-            if (token != generation) return@launch
-            state = state.copy(networkAvailability = availability)
-            if (availability == NetworkAvailability.OFFLINE) {
-                state =
-                    state.copy(
-                        loading = false,
-                        cached = state.forecast != null,
-                        error =
-                            if (state.forecast == null) "Offline · no saved forecast"
-                            else "Offline",
-                    )
-                return@launch
-            }
-            launch {
-                try {
-                    val result =
-                        repository.forecast(
-                            place,
-                            onUpdate = { partial ->
-                                if (token == generation) publishForecast(place.id, partial)
-                            },
-                        )
-                    if (token == generation) {
-                        publishForecast(place.id, result)
-                        state = state.copy(loading = false)
+                    launch {
+                        val savedHistory = repository.cachedHistory(place)
+                        if (token == generation && state.history == null && savedHistory != null) {
+                            state = state.copy(history = savedHistory)
+                        }
                     }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    if (token == generation)
+                    val availability =
+                        withContext(Dispatchers.IO) {
+                            NetworkConnectivity.status(getApplication())
+                        }
+                    if (token != generation) return@coroutineScope
+                    state = state.copy(networkAvailability = availability)
+                    launch { activeRainRequest?.join() }
+                    if (availability == NetworkAvailability.OFFLINE) {
                         state =
                             state.copy(
                                 loading = false,
                                 cached = state.forecast != null,
                                 error =
-                                    if (state.forecast != null) "Update unavailable"
-                                    else e.message ?: "The weather server couldn't be reached",
+                                    if (state.forecast == null) "Offline · no saved forecast"
+                                    else "Offline",
                             )
+                        return@coroutineScope
+                    }
+                    launch {
+                        try {
+                            val result =
+                                repository.forecast(
+                                    place,
+                                    onUpdate = { partial ->
+                                        if (token == generation) publishForecast(place.id, partial)
+                                    },
+                                )
+                            if (token == generation) {
+                                publishForecast(place.id, result)
+                                state = state.copy(loading = false)
+                            }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            if (token == generation)
+                                state =
+                                    state.copy(
+                                        loading = false,
+                                        cached = state.forecast != null,
+                                        error =
+                                            if (state.forecast != null) "Update unavailable"
+                                            else e.message ?: "The weather server couldn't be reached",
+                                    )
+                        }
+                    }
+                    launch {
+                        try {
+                            val history = repository.history(place)
+                            if (token == generation) state = state.copy(history = history)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            /* Historical observations are optional. */
+                        }
+                    }
+                    launch {
+                        try {
+                            val warnings = repository.officialAlerts(place)
+                            if (token == generation) state = state.copy(warnings = warnings)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            /* Do not invent an all-clear. */
+                        }
+                    }
                 }
-            }
-            launch {
-                try {
-                    val history = repository.history(place)
-                    if (token == generation) state = state.copy(history = history)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    /* Historical observations are optional. */
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                if (token == generation) {
+                    state = state.copy(
+                        cached = state.forecast != null,
+                        error = if (state.forecast == null) "Weather unavailable" else "Update unavailable",
+                    )
                 }
-            }
-            launch {
-                try {
-                    val warnings = repository.officialAlerts(place)
-                    if (token == generation) state = state.copy(warnings = warnings)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    /* Do not invent an all-clear. */
-                }
+            } finally {
+                // Superseded place/server requests must never finish a newer refresh indicator.
+                if (token == generation) state = state.copy(loading = false, refreshing = false)
             }
         }
+    }
+
+    /** Only called by the visible Weather page; a manual pull can adopt this same request. */
+    internal suspend fun refreshVisibleWeather() {
+        if (state.clearingCache) return
+        val place = state.place ?: return
+        var ownedJob: Job? = null
+        var ownedChips: Job? = null
+        try {
+            // Re-age and refresh unselected readings too: their source/cache labels must not
+            // remain frozen while the selected place receives visible-screen updates.
+            refreshChipTemperatures()
+            ownedChips = chipJob
+            if (visibleWeatherRefreshDelayMillis() == 0L) {
+                val target = LoadTarget(state.settings.serverUrl, place.id, place.lat, place.lon)
+                if (loadTarget == target && loadJob?.isActive == true) {
+                    loadJob?.join()
+                } else {
+                    loadWeather(userInitiated = false)
+                    ownedJob = loadJob
+                    ownedJob?.join()
+                }
+            }
+            ownedChips?.join()
+        } finally {
+            // A later manual pull or replacement request owns its own lifetime. The chip
+            // batch belongs to this visible pass and stops when its screen is no longer active.
+            if (!currentCoroutineContext().isActive) {
+                if (ownedJob != null && loadJob === ownedJob && !state.refreshing) ownedJob.cancel()
+                if (ownedChips != null && chipJob === ownedChips) ownedChips.cancel()
+            }
+        }
+    }
+
+    internal fun visibleWeatherRefreshDelayMillis(): Long {
+        val fetchedAt = state.forecast?.fetchedAt ?: return 0
+        val age = (System.currentTimeMillis() - fetchedAt).coerceAtLeast(0)
+        return (VISIBLE_REFRESH_MILLIS - age).coerceAtLeast(0)
     }
 
     private fun publishForecast(placeId: String, forecast: Forecast) {
@@ -273,10 +367,11 @@ class WxViewModel(application: Application) : AndroidViewModel(application) {
             state.copy(
                 forecast = forecast,
                 cached = false,
+                placeTemperatureLabels = state.placeTemperatureLabels + (placeId to forecast.temperatureLabel(false)),
                 placeTemperatures =
                     state.placeTemperatures +
                         (placeId to
-                            (forecast.observation?.tempF ?: forecast.hours.firstOrNull()?.tempF)),
+                            (forecast.currentTemperature())),
             )
     }
 
@@ -297,7 +392,7 @@ class WxViewModel(application: Application) : AndroidViewModel(application) {
     /** Continues across Settings dismissal; saved places and alert choices stay intact. */
     fun clearDownloadedData() {
         if (state.clearingCache) return
-        state = state.copy(clearingCache = true, cacheClearStatus = null)
+        state = state.copy(clearingCache = true, cacheClearStatus = null, loading = false, refreshing = false)
         viewModelScope.launch {
             try {
                 generation++
@@ -332,7 +427,9 @@ class WxViewModel(application: Application) : AndroidViewModel(application) {
                         rainStatus = null,
                         cached = false,
                         loading = false,
+                        refreshing = false,
                         placeTemperatures = emptyMap(),
+                        placeTemperatureLabels = emptyMap(),
                         error = "No saved forecast",
                     )
                 check(mapsCleared) { "Weather cleared; map cache couldn't be cleared" }
