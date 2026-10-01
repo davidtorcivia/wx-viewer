@@ -574,15 +574,19 @@ private fun RadarView(
         session.save()
     }
     fun scrub(fraction: Float) {
-        if (frames.isNotEmpty() && !session.showingSavedView) {
+        // Read live session state when the gesture arrives. A local function reference can
+        // compare equal after its captured frame list changes, retaining the initial empty list.
+        val currentFrames = session.frames.frames
+        if (currentFrames.isNotEmpty() && !session.showingSavedView) {
             session.playing = false
-            val position = fraction * frames.lastIndex
-            val i = floor(position).toInt().coerceIn(frames.indices)
-            val a = frames[i]
-            val b = frames.getOrNull(i + 1) ?: a
+            val position = fraction.coerceIn(0f, 1f) * currentFrames.lastIndex
+            val i = floor(position).toInt().coerceIn(currentFrames.indices)
+            val a = currentFrames[i]
+            val b = currentFrames.getOrNull(i + 1) ?: a
             session.time = a.time + (position - i) * (b.time - a.time).toDouble()
         }
     }
+
     BoxWithConstraints(if (compact) modifier else modifier.fillMaxSize().testTag("radar_field").semantics { testTagsAsResourceId = true }) {
         val viewportWidth = maxWidth
         NativeRadarMap(
@@ -739,8 +743,8 @@ private fun RadarView(
             fraction = sliderFraction,
             onPlay = { session.playing = !session.playing },
             onSpeed = { session.speed = (session.speed + 1) % 3; session.save() },
-            onRange = ::nextRange,
-            onScrub = ::scrub,
+            onRange = { nextRange() },
+            onScrub = { scrub(it) },
             modifier = Modifier.align(Alignment.BottomCenter)
                 .padding(if (compact) 8.dp else 12.dp).fillMaxWidth()
                 .onSizeChanged { size ->
