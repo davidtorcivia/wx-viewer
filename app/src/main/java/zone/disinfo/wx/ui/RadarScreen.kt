@@ -178,6 +178,9 @@ internal data class RadarInspection(
     val py: Float = 0f,
 )
 
+internal data class RadarTimelineIdentity(val overlay: String, val range: String, val revision: Long, val cacheGeneration: Long)
+internal data class RadarMetadataRequest(val sequence: Long, val timeline: RadarTimelineIdentity, val commandRevision: Long)
+
 internal class RadarSession(context: Context, val key: String, place: Place) {
     private val prefs = context.getSharedPreferences("radar_view", Context.MODE_PRIVATE)
     private val prefix = key.hashCode().toString()
@@ -193,6 +196,13 @@ internal class RadarSession(context: Context, val key: String, place: Place) {
     var speed by mutableIntStateOf(prefs.getInt("$prefix-speed", 0).coerceIn(0, 2))
     var legendOpen by mutableStateOf(prefs.getBoolean("$prefix-legend", true))
     var playing by mutableStateOf(true)
+    var commandRevision by mutableLongStateOf(0L)
+        private set
+    var timelineRevision by mutableLongStateOf(0L)
+        private set
+    var metadataRevision by mutableLongStateOf(0L)
+        private set
+    private var metadataSequence = 0L
     var time by mutableDoubleStateOf(0.0)
     var frames by mutableStateOf(RadarFrames(emptyList()))
     var cacheGeneration = DisplayCache.generation
@@ -216,6 +226,37 @@ internal class RadarSession(context: Context, val key: String, place: Place) {
     var scaleWidth by mutableFloatStateOf(72f)
     var timeZone = ZoneId.systemDefault().id
 
+    fun noteCommand() { commandRevision++ }
+    fun setPlayingIntent(value: Boolean) { noteCommand(); playing = value }
+    fun seekTo(value: Double) { noteCommand(); playing = false; time = value }
+    fun invalidateMetadata() { metadataSequence++; metadataRevision++ }
+    fun noteTimelineCommand() {
+        noteCommand()
+        timelineRevision++
+        invalidateMetadata()
+    }
+    fun timelineIdentity() = RadarTimelineIdentity(overlay, effectiveRange, timelineRevision, DisplayCache.generation)
+    fun owns(identity: RadarTimelineIdentity) = identity == timelineIdentity()
+    fun beginMetadataRequest() = RadarMetadataRequest(++metadataSequence, timelineIdentity(), commandRevision)
+    fun owns(request: RadarMetadataRequest) = request.sequence == metadataSequence && owns(request.timeline)
+
+    /** A response owns its dataset, but always resolves the latest cursor, never one captured before I/O. */
+    fun applyMetadata(request: RadarMetadataRequest, result: RadarFrames, requested: Long?, now: Long): Boolean {
+        if (!owns(request) || result.frames.isEmpty()) return false
+        val currentTime = time
+        val initialTarget = requested?.takeIf { request.commandRevision == commandRevision }
+        val newest = result.frames.indexOfLast { it.leadMinutes == 0 && it.time <= now }.takeIf { it >= 0 } ?: 0
+        frames = result
+        if (DisplayCache.isOnline()) showingSavedView = false
+        time = when {
+            initialTarget != null -> result.frames.minBy { abs(it.time - initialTarget) }.time.toDouble()
+            currentTime == 0.0 || currentTime < result.frames.first().time || currentTime > result.frames.last().time ->
+                result.frames[newest].time.toDouble()
+            else -> currentTime
+        }
+        return true
+    }
+
     fun save() {
         prefs
             .edit()
@@ -237,11 +278,13 @@ internal class RadarSession(context: Context, val key: String, place: Place) {
 /** Drives the same retained session used by the native map and transport controls. */
 internal suspend fun runRadarPlayback(session: RadarSession, frameWaiting: () -> Boolean) = coroutineScope {
     val frames = session.frames.frames
+    val commandRevision = session.commandRevision
     if (!session.playing || frames.size < 2 || session.showingSavedView)
         return@coroutineScope
     // Changing Compose state schedules effect cancellation for a later composition. A
     // timer already due on the main thread must check the live session before committing.
-    fun canAdvance() = session.playing && session.frames.frames === frames && !session.showingSavedView
+    fun canAdvance() = session.playing && session.commandRevision == commandRevision &&
+        session.frames.frames === frames && !session.showingSavedView
     val mult = listOf(1.0, .5, .25)[session.speed]
     val observedMrms =
         frames.first().source == "mrms" &&
@@ -317,6 +360,7 @@ private object RadarSessions {
             .getOrPut(key) { RadarSession(context, key, place) }
             .also { session ->
                 if (session.cacheGeneration != DisplayCache.generation) {
+                    session.noteTimelineCommand()
                     session.frames = RadarFrames(emptyList())
                     session.savedView = null
                     session.showingSavedView = false
@@ -399,12 +443,15 @@ private fun RadarView(
     LaunchedEffect(network, session) {
         val offline = network == NetworkAvailability.OFFLINE
         if (offline) {
+            session.invalidateMetadata()
+            loading = false
             session.liveReady = false
             session.inspection = null
             if (session.savedView != null) session.showingSavedView = true
         } else if (wasOffline) {
             // Restart both metadata and a style request that may have failed underground.
             session.showingSavedView = false
+            session.invalidateMetadata()
             refresh++
             mapError = null
         }
@@ -426,6 +473,12 @@ private fun RadarView(
     DisposableEffect(lifecycle, session) {
         val observer = LifecycleEventObserver { _, _ ->
             resumed = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+            if (!resumed) {
+                // Retire work synchronously even when the window stops producing Compose
+                // frames; keep the user's playing flag for the next resume.
+                session.noteCommand()
+                session.invalidateMetadata()
+            }
         }
         lifecycle.addObserver(observer)
         onDispose {
@@ -434,6 +487,7 @@ private fun RadarView(
         }
     }
     LaunchedEffect(session, initialLayer, initialTimeSeconds) {
+        if (initialLayer != null || initialTimeSeconds != null) session.noteTimelineCommand()
         if (initialLayer != null && initialLayer in radarOverlays) {
             if (session.overlay != initialLayer) {
                 session.frames = RadarFrames(emptyList())
@@ -451,31 +505,34 @@ private fun RadarView(
             session.playing = false
         }
     }
-    LaunchedEffect(session.key, session.overlay, session.effectiveRange) {
+    LaunchedEffect(session.key, session.overlay, session.effectiveRange, session.timelineRevision) {
+        val identity = session.timelineIdentity()
+        val commandRevision = session.commandRevision
         session.liveReady = false
         session.savedView = null
         session.showingSavedView = false
-        val generation = DisplayCache.generation
-        val snapshot = RadarViewCache.read(session.key, session.overlay, session.effectiveRange)
-        if (generation != DisplayCache.generation) return@LaunchedEffect
-        session.savedView = snapshot
-        if (snapshot != null && !session.liveReady && !DisplayCache.isOnline()) {
+        val snapshot = RadarViewCache.read(session.key, identity.overlay, identity.range)
+        if (!session.owns(identity)) return@LaunchedEffect
+        if (snapshot != null && (session.savedView?.savedAt ?: Long.MIN_VALUE) <= snapshot.savedAt)
+            session.savedView = snapshot
+        val chosenSaved = session.savedView
+        if (chosenSaved != null && !session.liveReady && !DisplayCache.isOnline()) {
             session.showingSavedView = true
             session.inspection = null
-            session.time = snapshot.frameTime.toDouble()
+            if (session.commandRevision == commandRevision) session.time = chosenSaved.frameTime.toDouble()
         }
         if (session.frames.frames.isEmpty()) {
             try {
                 val cached =
                     loadRadarFrames(
                         serverUrl,
-                        session.overlay,
-                        session.effectiveRange,
+                        identity.overlay,
+                        identity.range,
                         savedOnly = true,
                     )
-                if (generation == DisplayCache.generation && session.frames.frames.isEmpty()) {
+                if (session.owns(identity) && session.frames.frames.isEmpty()) {
                     session.frames = cached
-                    if (session.time == 0.0)
+                    if (session.time == 0.0 && session.commandRevision == commandRevision)
                         session.time = cached.frames.lastOrNull()?.time?.toDouble() ?: 0.0
                 }
             } catch (e: CancellationException) {
@@ -485,39 +542,27 @@ private fun RadarView(
             }
         }
     }
-    LaunchedEffect(session, serverUrl, session.overlay, session.effectiveRange, refresh, resumed) {
+    LaunchedEffect(session, serverUrl, session.overlay, session.effectiveRange, session.timelineRevision,
+        session.metadataRevision, refresh, resumed) {
         if (!resumed) return@LaunchedEffect
         val which = session.overlay
         val range = session.effectiveRange
+        val request = session.beginMetadataRequest()
         while (isActive) {
+            if (!session.owns(request)) return@LaunchedEffect
             loading = session.frames.frames.isEmpty() && !session.showingSavedView
             try {
                 val result = loadRadarFrames(serverUrl, which, range)
+                if (!session.owns(request)) return@LaunchedEffect
                 if (result.frames.isEmpty())
                     throw IOException("${radarOverlays[which]} unavailable")
-                val old = session.time
-                session.frames = result
-                session.showingSavedView = false
-                val requested = linkPending
-                val newest =
-                    result.frames
-                        .indexOfLast { it.leadMinutes == 0 && it.time <= Instant.now().epochSecond }
-                        .takeIf { it >= 0 } ?: 0
-                session.time =
-                    when {
-                        requested != null -> {
-                            linkPending = null
-                            result.frames.minBy { abs(it.time - requested) }.time.toDouble()
-                        }
-                        old == 0.0 ||
-                            old < result.frames.first().time ||
-                            old > result.frames.last().time -> result.frames[newest].time.toDouble()
-                        else -> old
-                    }
+                if (!session.applyMetadata(request, result, linkPending, Instant.now().epochSecond)) return@LaunchedEffect
+                linkPending = null
                 error = null
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (!session.owns(request)) return@LaunchedEffect
                 if (Log.isLoggable(RADAR_LOG_TAG, Log.DEBUG))
                     Log.d(RADAR_LOG_TAG, "Frame request failed", e)
                 if (session.savedView != null && (!DisplayCache.isOnline() || !session.liveReady)) {
@@ -530,7 +575,7 @@ private fun RadarView(
                         "Saved radar imagery unavailable for this area"
                     else radarUnavailable(which, range)
             } finally {
-                loading = false
+                if (session.owns(request)) loading = false
             }
             delay(60_000)
         }
@@ -538,6 +583,7 @@ private fun RadarView(
     LaunchedEffect(
         session,
         session.playing,
+        session.commandRevision,
         session.frames,
         network,
         resumed,
@@ -561,11 +607,13 @@ private fun RadarView(
         remember(session, frames) {
             {
                 if (frames.size > 1) {
-                    val position = frames.indexOfLast { it.time <= session.time }.coerceAtLeast(0)
+                    val displayedTime = session.savedView?.takeIf { session.showingSavedView }
+                        ?.frameTime?.toDouble() ?: session.time
+                    val position = frames.indexOfLast { it.time <= displayedTime }.coerceAtLeast(0)
                     val next = frames.getOrNull(position + 1)
                     (position +
                             (if (next != null)
-                                (session.time - frames[position].time) /
+                                (displayedTime - frames[position].time) /
                                     (next.time - frames[position].time)
                             else 0.0))
                         .toFloat() / frames.lastIndex
@@ -591,6 +639,8 @@ private fun RadarView(
     val density = LocalDensity.current
     var transportHeight by remember(compact) { mutableStateOf(if (compact) 48.dp else 113.dp) }
     fun changeOverlay(layer: String) {
+        session.noteTimelineCommand()
+        linkPending = null
         session.overlay = layer
         session.frames = RadarFrames(emptyList())
         session.time = 0.0
@@ -598,6 +648,8 @@ private fun RadarView(
         session.save()
     }
     fun nextRange() {
+        session.noteTimelineCommand()
+        linkPending = null
         val current = radarRanges.indexOfFirst { it.first == session.effectiveRange }
         var next = radarRanges[(current + 1) % 3].first
         if (next == "now" && (session.overlay == "precip" || session.overlay == "snow"))
@@ -613,12 +665,12 @@ private fun RadarView(
         // compare equal after its captured frame list changes, retaining the initial empty list.
         val currentFrames = session.frames.frames
         if (currentFrames.isNotEmpty() && !session.showingSavedView) {
-            session.playing = false
             val position = fraction.coerceIn(0f, 1f) * currentFrames.lastIndex
             val i = floor(position).toInt().coerceIn(currentFrames.indices)
             val a = currentFrames[i]
             val b = currentFrames.getOrNull(i + 1) ?: a
-            session.time = a.time + (position - i) * (b.time - a.time).toDouble()
+            linkPending = null
+            session.seekTo(a.time + (position - i) * (b.time - a.time).toDouble())
         }
     }
 
@@ -781,8 +833,8 @@ private fun RadarView(
             speed = listOf("1×", "½×", "¼×")[session.speed],
             range = radarRanges.first { it.first == session.effectiveRange }.second,
             fraction = sliderFraction,
-            onPlay = { session.playing = !session.playing },
-            onSpeed = { session.speed = (session.speed + 1) % 3; session.save() },
+            onPlay = { session.setPlayingIntent(!session.playing) },
+            onSpeed = { session.noteCommand(); session.speed = (session.speed + 1) % 3; session.save() },
             onRange = { nextRange() },
             onScrub = { scrub(it) },
             modifier = Modifier.align(Alignment.BottomCenter)
@@ -827,7 +879,7 @@ private fun RadarView(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(problem, color = ink, fontSize = 12.sp, modifier = Modifier.weight(1f, false))
-                TextButton(onClick = { refresh++; mapError = null },
+                TextButton(onClick = { session.invalidateMetadata(); refresh++; mapError = null },
                     modifier = Modifier.heightIn(min = 44.dp)) {
                     Text("Retry", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
@@ -1860,6 +1912,7 @@ private class NativeRadarController(
             }
         val overlay = session.overlay
         val range = session.effectiveRange
+        val snapshotIdentity = session.timelineIdentity()
         val server = base
         val generation = DisplayCache.generation
         val originalStyle = loaded.json
@@ -1918,7 +1971,7 @@ private class NativeRadarController(
                         renderRadarSnapshot(view.context, width, height, camera, stripped, builder)
                     }
                 if (
-                    base == server && session.overlay == overlay && session.effectiveRange == range
+                    !disposed && base == server && session.owns(snapshotIdentity)
                 ) {
                     RadarViewCache.write(
                         session.key,
@@ -1930,7 +1983,8 @@ private class NativeRadarController(
                         now,
                         generation,
                     )
-                    if (generation == DisplayCache.generation)
+                    if (!disposed && base == server && session.owns(snapshotIdentity) &&
+                        (session.savedView?.savedAt ?: Long.MIN_VALUE) <= now)
                         session.savedView =
                             SavedRadarView(
                                 bitmap,
