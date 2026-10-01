@@ -93,11 +93,8 @@ class OfflinePreviewSmokeTest {
             await(By.desc("Settings")).click()
             await(By.text("Done")).click()
             tapTab("Alerts")
-            check(
-                device.findObjects(By.text("Alerts")).any {
-                    it.visibleBounds.centerY() < device.displayHeight / 2
-                }
-            )
+            await(By.text("Weather notifications"))
+            await(By.text("Alerts")) { it.visibleBounds.centerY() < device.displayHeight / 2 }
             tapTab("Weather")
             awaitHero(firstTemperature)
 
@@ -195,12 +192,15 @@ class OfflinePreviewSmokeTest {
         error("Cached hero $temperature was not visible within5seconds")
     }
 
-    private fun await(selector: BySelector): UiObject2 {
+    private fun await(selector: BySelector, matches: (UiObject2) -> Boolean = { true }): UiObject2 {
         val end = SystemClock.elapsedRealtime() + 5_000
         do {
-            device.findObject(selector)?.let {
-                return it
-            }
+            device
+                .findObjects(selector)
+                .firstOrNull { it.visibleBounds.height() > 0 && matches(it) }
+                ?.let {
+                    return it
+                }
             SystemClock.sleep(50)
         } while (SystemClock.elapsedRealtime() < end)
         error("Missing cached preview UI: $selector")
@@ -211,12 +211,7 @@ class OfflinePreviewSmokeTest {
     }
 
     private fun tapTab(name: String) {
-        (device
-                .findObjects(By.text(name))
-                .filter { it.visibleBounds.centerY() > device.displayHeight * .75 }
-                .maxByOrNull { it.visibleBounds.centerY() }
-                ?: error("Missing navigation tab $name"))
-            .click()
+        await(By.text(name)) { it.visibleBounds.centerY() > device.displayHeight * .75 }.click()
     }
 
     private fun shell(command: String) = device.executeShellCommand(command).trim()

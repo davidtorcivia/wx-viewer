@@ -144,22 +144,21 @@ class WeatherPerformanceBenchmark {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
             )
         }
-        fun await(selector: BySelector): UiObject2 {
+        fun await(selector: BySelector, matches: (UiObject2) -> Boolean = { true }): UiObject2 {
             val deadline = SystemClock.elapsedRealtime() + 15_000
             do {
-                device.findObject(selector)?.let {
-                    return it
-                }
+                device
+                    .findObjects(selector)
+                    .firstOrNull { it.visibleBounds.height() > 0 && matches(it) }
+                    ?.let {
+                        return it
+                    }
                 SystemClock.sleep(50)
             } while (SystemClock.elapsedRealtime() < deadline)
-            captureFailure(device, "minified-smoke-missing-ui")
             error("Minified smoke UI missing: $selector")
         }
         fun tab(label: String) {
-            (device
-                    .findObjects(By.text(label))
-                    .filter { it.visibleBounds.centerY() > device.displayHeight * .75 }
-                    .maxByOrNull { it.visibleBounds.centerY() } ?: error("Missing tab $label"))
+            await(By.text(label)) { it.visibleBounds.centerY() > device.displayHeight * .75 }
                 .click()
         }
         fun hero(value: String) {
@@ -176,17 +175,22 @@ class WeatherPerformanceBenchmark {
             error("Expected loaded hero $value after minified startup")
         }
         fun selected(label: String) {
-            var node: UiObject2? = await(By.text(label))
-            repeat(3) {
-                if (node?.isChecked == true || node?.isSelected == true) return
-                node = node?.parent
-            }
+            val deadline = SystemClock.elapsedRealtime() + 15_000
+            do {
+                var node = device.findObject(By.text(label))
+                repeat(3) {
+                    if (node?.isChecked == true || node?.isSelected == true) return
+                    node = node?.parent
+                }
+                SystemClock.sleep(50)
+            } while (SystemClock.elapsedRealtime() < deadline)
             error("Persisted setting is not selected: $label")
         }
-        device.executeShellCommand("am force-stop $target")
-        start("zone.disinfo.wx.benchmark.BenchmarkFixtureActivity")
-        await(By.text("Benchmark fixture ready"))
+        var smokeFailure: Throwable? = null
         try {
+            device.executeShellCommand("am force-stop $target")
+            start("zone.disinfo.wx.benchmark.BenchmarkFixtureActivity")
+            await(By.text("Benchmark fixture ready"))
             start("zone.disinfo.wx.MainActivity")
             hero("68°")
             tab("Radar")
@@ -208,16 +212,27 @@ class WeatherPerformanceBenchmark {
             device.takeScreenshot(File(outputDirectory(), "minified-smoke-settings-dark.png"))
             await(By.text("Done")).click()
             tab("Alerts")
-            check(
-                device.findObjects(By.text("Alerts")).any {
-                    it.visibleBounds.centerY() < device.displayHeight / 2
-                }
-            )
+            await(By.text("Weather notifications"))
+            await(By.text("Alerts")) { it.visibleBounds.centerY() < device.displayHeight / 2 }
             device.takeScreenshot(File(outputDirectory(), "minified-smoke-alerts.png"))
+        } catch (failure: Throwable) {
+            smokeFailure = failure
+            runCatching { captureFailure(device, "minified-smoke-failure") }
+                .exceptionOrNull()
+                ?.let(failure::addSuppressed)
+            throw failure
         } finally {
-            start("zone.disinfo.wx.benchmark.BenchmarkFixtureActivity")
-            await(By.text("Benchmark fixture ready"))
-            device.pressHome()
+            try {
+                start("zone.disinfo.wx.benchmark.BenchmarkFixtureActivity")
+                await(By.text("Benchmark fixture ready"))
+                device.pressHome()
+            } catch (cleanupFailure: Throwable) {
+                runCatching { captureFailure(device, "minified-smoke-cleanup-failure") }
+                    .exceptionOrNull()
+                    ?.let(cleanupFailure::addSuppressed)
+                val primary = smokeFailure
+                if (primary != null) primary.addSuppressed(cleanupFailure) else throw cleanupFailure
+            }
         }
     }
 
