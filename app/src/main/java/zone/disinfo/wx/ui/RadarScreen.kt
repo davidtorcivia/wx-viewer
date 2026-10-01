@@ -234,6 +234,80 @@ internal class RadarSession(context: Context, val key: String, place: Place) {
             if (range == "now" && (overlay == "precip" || overlay == "snow")) "hourly" else range
 }
 
+/** Drives the same retained session used by the native map and transport controls. */
+internal suspend fun runRadarPlayback(session: RadarSession, frameWaiting: () -> Boolean) = coroutineScope {
+    val frames = session.frames.frames
+    if (!session.playing || frames.size < 2 || session.showingSavedView)
+        return@coroutineScope
+    // Changing Compose state schedules effect cancellation for a later composition. A
+    // timer already due on the main thread must check the live session before committing.
+    fun canAdvance() = session.playing && session.frames.frames === frames && !session.showingSavedView
+    val mult = listOf(1.0, .5, .25)[session.speed]
+    val observedMrms =
+        frames.first().source == "mrms" &&
+            !frames.first().satellite &&
+            frames.first().field == null
+    if (observedMrms) {
+        val newest =
+            frames.lastOrNull { it.leadMinutes == 0 }?.time?.toDouble()
+                ?: frames.last().time.toDouble()
+        val end = frames.last().time.toDouble()
+        var last = System.nanoTime()
+        var holdUntil = 0L
+        var wrap = false
+        if (session.time >= end) session.time = frames.first().time.toDouble()
+        while (isActive) {
+            val tickTime = session.time
+            delay(16)
+            if (!canAdvance()) return@coroutineScope
+            val now = System.nanoTime()
+            if (session.time != tickTime) {
+                // A seek followed immediately by play can keep the effect's key unchanged.
+                // Drop any hold/wrap decision made before that seek and start from its time.
+                last = now
+                holdUntil = 0L
+                wrap = false
+                continue
+            }
+            val dt = ((now - last) / 1_000_000.0).coerceAtMost(100.0)
+            last = now
+            if (holdUntil > 0) {
+                if (now >= holdUntil) {
+                    holdUntil = 0
+                    if (wrap) session.time = frames.first().time.toDouble()
+                    else session.time += .001
+                }
+            } else if (session.time >= end) {
+                holdUntil = now + 1_500_000_000
+                wrap = true
+            } else if (!frameWaiting()) {
+                val next = session.time + dt * 7200 / 9000 * mult
+                if (session.time < newest && next >= newest) {
+                    session.time = newest
+                    holdUntil = now + 1_500_000_000
+                    wrap = false
+                } else session.time = next.coerceAtMost(end)
+            }
+        }
+    } else
+        while (isActive) {
+            val tickTime = session.time
+            val index = frames.indexOfLast { it.time <= tickTime }.coerceAtLeast(0)
+            delay((500 / mult).toLong() + if (index == frames.lastIndex) 1500 else 0)
+            if (!canAdvance()) return@coroutineScope
+            var waited = 0
+            while (frameWaiting() && waited < 5000 && session.time == tickTime) {
+                delay(100)
+                if (!canAdvance()) return@coroutineScope
+                waited += 100
+            }
+            // A rapid seek/pause/play must restart the delay from the new position instead
+            // of applying the index captured before the gesture.
+            if (session.time != tickTime) continue
+            session.time = frames[(index + 1) % frames.size].time.toDouble()
+        }
+}
+
 private object RadarSessions {
     val sessions = linkedMapOf<String, RadarSession>()
 
@@ -470,57 +544,8 @@ private fun RadarView(
         session.speed,
         session.showingSavedView,
     ) {
-        val frames = session.frames.frames
-        if (!session.playing || !resumed || frames.size < 2 || session.showingSavedView || network == NetworkAvailability.OFFLINE)
-            return@LaunchedEffect
-        val mult = listOf(1.0, .5, .25)[session.speed]
-        val observedMrms =
-            frames.first().source == "mrms" &&
-                !frames.first().satellite &&
-                frames.first().field == null
-        if (observedMrms) {
-            val newest =
-                frames.lastOrNull { it.leadMinutes == 0 }?.time?.toDouble()
-                    ?: frames.last().time.toDouble()
-            val end = frames.last().time.toDouble()
-            var last = System.nanoTime()
-            var holdUntil = 0L
-            var wrap = false
-            if (session.time >= end) session.time = frames.first().time.toDouble()
-            while (isActive) {
-                delay(16)
-                val now = System.nanoTime()
-                val dt = ((now - last) / 1_000_000.0).coerceAtMost(100.0)
-                last = now
-                if (holdUntil > 0) {
-                    if (now >= holdUntil) {
-                        holdUntil = 0
-                        if (wrap) session.time = frames.first().time.toDouble()
-                        else session.time += .001
-                    }
-                } else if (session.time >= end) {
-                    holdUntil = now + 1_500_000_000
-                    wrap = true
-                } else if (!frameWaiting) {
-                    val next = session.time + dt * 7200 / 9000 * mult
-                    if (session.time < newest && next >= newest) {
-                        session.time = newest
-                        holdUntil = now + 1_500_000_000
-                        wrap = false
-                    } else session.time = next.coerceAtMost(end)
-                }
-            }
-        } else
-            while (isActive) {
-                val index = frames.indexOfLast { it.time <= session.time }.coerceAtLeast(0)
-                delay((500 / mult).toLong() + if (index == frames.lastIndex) 1500 else 0)
-                var waited = 0
-                while (frameWaiting && waited < 5000) {
-                    delay(100)
-                    waited += 100
-                }
-                session.time = frames[(index + 1) % frames.size].time.toDouble()
-            }
+        if (!resumed || network == NetworkAvailability.OFFLINE) return@LaunchedEffect
+        runRadarPlayback(session) { frameWaiting }
     }
 
     val frames = session.frames.frames
