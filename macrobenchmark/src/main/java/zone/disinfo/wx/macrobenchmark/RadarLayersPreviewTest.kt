@@ -70,6 +70,7 @@ class RadarLayersPreviewTest {
                         }
                         screenshot("${slug(layer)}-$range")
                         results.put(JSONObject().put("layer", layer).put("rangeIndex", range)
+                            .put("range", await(By.desc("Time range")).text)
                             .put("result", "passed").put("pid", shell("pidof $target")))
                         await(By.desc("Time range")).click()
                     }
@@ -79,6 +80,8 @@ class RadarLayersPreviewTest {
                         .put("failure", failure.toString()))
                     screenshot("${slug(layer)}-failure")
                     File(output(), "${slug(layer)}-logcat.txt").writeText(shell("logcat -d -t 1500"))
+                    // A crashing saved field must not prevent independent coverage of the rest.
+                    shell("pm clear $target")
                     coldStart()
                 } finally { saveProof(failures) }
             }
@@ -95,6 +98,55 @@ class RadarLayersPreviewTest {
                 .put("coldRestart", true).put("result", "passed"))
         } finally { saveProof(failures) }
         check(failures.isEmpty()) { failures.joinToString("\n") }
+    }
+
+
+    @Test
+    fun allLayersRemainResponsiveOffline() {
+        assumeTrue(args.getString("wxRadarLayersOffline") == "true")
+        check(shell("getprop ro.kernel.qemu") == "1") { "Disposable emulator required" }
+        check(context.packageManager.getApplicationInfo(target, 0).flags and
+            ApplicationInfo.FLAG_DEBUGGABLE == 0) { "Actual non-debuggable preview required" }
+        Configurator.getInstance().waitForIdleTimeout = 0
+        val radios = mapOf("airplane" to shell("settings get global airplane_mode_on"),
+            "wifi" to shell("settings get global wifi_on"),
+            "data" to shell("settings get global mobile_data"))
+        val failures = mutableListOf<String>()
+        try {
+            shell("cmd connectivity airplane-mode enable")
+            shell("svc wifi disable")
+            shell("svc data disable")
+            SystemClock.sleep(1_000)
+            coldStart()
+            for (layer in layers) {
+                select(layer)
+                val ranges = if (layer in listOf("Precip total", "Snow total")) 2 else 3
+                repeat(ranges) { range ->
+                    SystemClock.sleep(700)
+                    assertAlive()
+                    val status = device.findObjects(By.textContains("Saved")) +
+                        device.findObjects(By.textContains("unavailable")) +
+                        device.findObjects(By.text("Unavailable"))
+                    check(status.isNotEmpty()) { "Offline $layer must show saved/unavailable status" }
+                    device.findObject(By.desc("Pause animation"))?.click()
+                    screenshot("offline-${slug(layer)}-$range")
+                    results.put(JSONObject().put("layer", layer).put("rangeIndex", range)
+                        .put("offline", true).put("result", "passed"))
+                    await(By.desc("Time range")).click()
+                }
+            }
+            coldStart()
+            assertAlive()
+        } catch (failure: Throwable) {
+            failures += failure.toString()
+            screenshot("offline-failure")
+            throw failure
+        } finally {
+            shell("cmd connectivity airplane-mode ${if(radios["airplane"] == "1") "enable" else "disable"}")
+            shell("svc wifi ${if(radios["wifi"] in listOf("1", "2")) "enable" else "disable"}")
+            shell("svc data ${if(radios["data"] == "1") "enable" else "disable"}")
+            saveProof(failures)
+        }
     }
 
     private fun settle(layer: String, range: Int) {
@@ -139,6 +191,7 @@ class RadarLayersPreviewTest {
     private fun launch() {
         context.startActivity(Intent().setComponent(ComponentName(target, "zone.disinfo.wx.MainActivity"))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        await(By.pkg(target))
     }
     private fun assertAlive() {
         check(shell("pidof $target").isNotEmpty()) { "Preview process crashed" }
