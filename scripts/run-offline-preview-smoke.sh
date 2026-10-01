@@ -20,6 +20,23 @@ restore_radios() {
 trap restore_radios EXIT INT TERM
 adb install -r "$debug_apk"
 adb install -r -t "$debug_tests"
+# Exercise pull-refresh's real offline branches while the production debug Activity is installed.
+# Restore the original radio state before seeding the independent minified cold-start proof.
+adb shell cmd connectivity airplane-mode enable
+adb shell svc wifi disable
+adb shell svc data disable
+set +e
+timeout 150 adb shell am instrument -w -r \
+  -e class 'zone.disinfo.wx.ManualRefreshLifecycleE2eTest#cachedManualFailureCompletesAllRequestsAndKeepsCurrentFixAndContent,zone.disinfo.wx.ManualRefreshLifecycleE2eTest#emptyCacheFailureStopsManualRefreshAndAllowsAnotherAttempt' \
+  -e wxExpectOffline true \
+  zone.disinfo.wx.test/androidx.test.runner.AndroidJUnitRunner > "$output/pull-refresh-offline.log" 2>&1
+refresh_status=$?
+set -e
+restore_radios
+if [[ $refresh_status -ne 0 ]] || ! grep -q 'OK (2 tests)' "$output/pull-refresh-offline.log"; then
+  cat "$output/pull-refresh-offline.log"
+  exit 1
+fi
 seed_remote=/sdcard/Android/media/zone.disinfo.wx/offline-preview-seed
 timeout 300 adb shell am instrument -w -r \
   -e class 'zone.disinfo.wx.OfflinePreviewSeedTest#seedForMinifiedPreview' \
