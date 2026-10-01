@@ -43,6 +43,7 @@ jobs:
           path: |
             app/build/reports/
             app/build/test-results/
+            app/build/outputs/mapping/preview/
           if-no-files-found: ignore
 
   android-e2e:
