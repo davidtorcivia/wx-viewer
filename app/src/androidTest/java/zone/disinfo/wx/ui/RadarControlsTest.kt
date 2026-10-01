@@ -58,6 +58,10 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import kotlin.math.sign
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -74,6 +78,75 @@ import zone.disinfo.wx.deviceArtifactDirectory
 class RadarControlsTest {
     @get:Rule val compose = createComposeRule()
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun pendingPlaybackTicksPreservePauseSeekReplayAndReplacement() = runTest {
+        val origin = 1_700_000_000L
+        val place = Place("pending-tick", "Pending tick", 40.7128, -74.006)
+        for (pending in listOf("frame-delay", "tile-wait", "mrms-delay")) {
+            for (action in listOf("pause", "seek", "seek-and-replay", "replace-frames")) {
+                val message = "$action during $pending"
+                val session = RadarSession(instrumentation.targetContext,
+                    "pending-tick-$pending-$action-${System.nanoTime()}", place).apply {
+                    frames = RadarFrames((0..36).map {
+                        RadarFrame(origin + it * 60, if (pending == "mrms-delay") "mrms" else "gfs")
+                    })
+                    speed = 0
+                    time = (origin + 23 * 60).toDouble()
+                    playing = true
+                }
+                var waiting = pending == "tile-wait"
+                val job = launch { runRadarPlayback(session) { waiting } }
+                try {
+                    testScheduler.runCurrent()
+                    val deadline = when (pending) {
+                        "mrms-delay" -> 16L
+                        "tile-wait" -> 600L // The first 100ms tile wait follows the 500ms frame delay.
+                        else -> 500L
+                    }
+                    testScheduler.advanceTimeBy(deadline - 1)
+                    testScheduler.runCurrent()
+                    assertEquals("$message: the old tick must still be pending",
+                        (origin + 23 * 60).toDouble(), session.time, 0.0)
+
+                    // Deliberately leave the job alive: Compose cannot cancel its old effect
+                    // until recomposition, but the seek/pause has already changed the session.
+                    when (action) {
+                        "pause" -> session.playing = false
+                        "seek", "seek-and-replay" -> {
+                            session.playing = false
+                            session.time = origin + 36 * 60 * .8
+                            if (action == "seek-and-replay") session.playing = true
+                        }
+                        else -> {
+                            session.frames = RadarFrames(session.frames.frames.map {
+                                it.copy(time = it.time + 100_000)
+                            })
+                            session.time = origin + 100_000.0
+                        }
+                    }
+                    val selected = session.time
+                    testScheduler.advanceTimeBy(1)
+                    testScheduler.runCurrent()
+                    assertEquals("$message: a pending old tick overwrote the selected time",
+                        selected, session.time, 0.0)
+                    if (action == "seek-and-replay") {
+                        assertTrue("$message: immediate replay must remain active", job.isActive)
+                        if (pending != "mrms-delay") {
+                            waiting = false
+                            testScheduler.advanceTimeBy(500)
+                            testScheduler.runCurrent()
+                            assertEquals("$message: replay must advance from the selected frame",
+                                (origin + 29 * 60).toDouble(), session.time, 0.0)
+                        }
+                    } else assertTrue("$message: obsolete playback must stop", job.isCompleted)
+                } finally {
+                    job.cancelAndJoin()
+                }
+            }
+        }
+    }
 
     @Test
     fun fullTransportIsCenteredAndReadableInLightDarkAndLargeType() {
