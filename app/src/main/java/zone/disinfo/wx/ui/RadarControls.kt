@@ -196,13 +196,13 @@ internal fun RadarScrubber(value: () -> Float, enabled: Boolean, onValue: (Float
                 stateDescription = "${(progress * 100).toInt()} percent"
             },
         thumb = {
-            Canvas(Modifier.size(14.dp)) {
+            Canvas(Modifier.size(14.dp).testTag("radar_slider_thumb")) {
                 drawCircle(paper, 7.dp.toPx())
                 drawCircle(ink.copy(alpha = if (enabled) .96f else .32f), 4.5.dp.toPx())
             }
         },
         track = {
-            Canvas(Modifier.fillMaxWidth().height(2.dp)) {
+            Canvas(Modifier.fillMaxWidth().height(2.dp).testTag("radar_slider_track")) {
                 val y = size.height / 2
                 drawLine(ink.copy(alpha = .16f), Offset(0f, y), Offset(size.width, y),
                     2.dp.toPx(), StrokeCap.Round)
