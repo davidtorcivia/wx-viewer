@@ -4,11 +4,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [[ $(adb shell getprop ro.kernel.qemu | tr -d '\r') == 1 ]] || { echo 'Disposable emulator required'; exit 2; }
+original_radar_log=$(adb shell getprop log.tag.RadarScreen | tr -d '\r')
 original_animator=$(adb shell settings get global animator_duration_scale | tr -d '\r')
 original_airplane=$(adb shell settings get global airplane_mode_on | tr -d '\r')
 original_wifi=$(adb shell settings get global wifi_on | tr -d '\r')
 original_data=$(adb shell settings get global mobile_data | tr -d '\r')
 restore_emulator() {
+ adb shell "setprop log.tag.RadarScreen '$original_radar_log'" || true
  adb shell settings put global animator_duration_scale "$original_animator" || true
  adb shell cmd connectivity airplane-mode "$([[ "$original_airplane" == 1 ]] && echo enable || echo disable)" || true
  adb shell svc wifi "$([[ "$original_wifi" == 1 || "$original_wifi" == 2 ]] && echo enable || echo disable)" || true
@@ -17,6 +19,7 @@ restore_emulator() {
 trap restore_emulator EXIT INT TERM
 # Wind particles intentionally obey Android's animator setting; exercise them enabled.
 adb shell settings put global animator_duration_scale 1
+adb shell setprop log.tag.RadarScreen DEBUG
 output=app/build/outputs/radar-layers-preview
 mkdir -p "$output"
 adb install -r app/build/outputs/apk/debug/app-debug.apk
@@ -43,8 +46,8 @@ set +e
 timeout 900 adb shell am instrument -w -r \
  -e class zone.disinfo.wx.macrobenchmark.RadarLayersPreviewTest#allLiveLayersRangesInteractionsAndLifecycle \
  -e wxRadarLayersPreview true -e additionalTestOutputDir "$remote" \
- zone.disinfo.wx.macrobenchmark/androidx.test.runner.AndroidJUnitRunner > "$output/instrumentation.log" 2>&1
-status=$?
+ zone.disinfo.wx.macrobenchmark/androidx.test.runner.AndroidJUnitRunner 2>&1 | tee "$output/instrumentation.log"
+status=${PIPESTATUS[0]}
 set -e
 adb pull "$remote/." "$output/" || true
 adb logcat -d > "$output/logcat.txt" || true
@@ -63,8 +66,8 @@ for state in saved empty; do
  timeout 300 adb shell am instrument -w -r \
   -e class zone.disinfo.wx.macrobenchmark.RadarLayersPreviewTest#allLayersRemainResponsiveOffline \
   -e wxRadarLayersOffline true -e additionalTestOutputDir "$remote" \
-  zone.disinfo.wx.macrobenchmark/androidx.test.runner.AndroidJUnitRunner > "$output/offline-$state.log" 2>&1
- status=$?
+  zone.disinfo.wx.macrobenchmark/androidx.test.runner.AndroidJUnitRunner 2>&1 | tee "$output/offline-$state.log"
+ status=${PIPESTATUS[0]}
  set -e
  adb pull "$remote/." "$output/offline-$state/" || true
  adb logcat -d > "$output/offline-$state-logcat.txt" || true
