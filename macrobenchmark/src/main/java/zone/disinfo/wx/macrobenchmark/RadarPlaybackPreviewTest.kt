@@ -7,6 +7,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Rect
+import android.graphics.Point
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
@@ -662,7 +663,42 @@ class RadarPlaybackPreviewTest {
             "Physical seek input could not be injected"
         }
         await(By.desc("Play animation"))
-        assertSeekPosition(fraction)
+        try {
+            assertSeekPosition(fraction)
+        } catch (failure: Throwable) {
+            diagnoseSeekInput(fraction, bounds)
+            throw failure
+        }
+    }
+    private fun diagnoseSeekInput(fraction: Float, semantics: Rect) {
+        // Diagnostic comparisons never rescue a failed interaction. Preserve the original
+        // screenshot, compare physical injectors/actual rail coordinates, then fail as before.
+        device.takeScreenshot(File(output(), "seek-primary-failure.png"))
+        fun note(name: String) {
+            fresh()
+            emitDiagnostic("wxSeekInjection", "$name progress=${seekPercentage()} stamp=${stamp()}")
+        }
+        val point = Point(semantics.left + (semantics.width() * fraction).toInt(), semantics.centerY())
+        runCatching {
+            val slider = await(By.res("radar_scrubber"))
+            emitDiagnostic("wxSeekInjection", "UiObject2 display=${slider.displayId} point=$point")
+            slider.click(point)
+            SystemClock.sleep(500)
+            note("UiObject2 same coordinate")
+        }.onFailure { emitDiagnostic("wxSeekInjection", "UiObject2 diagnostic failed: $it") }
+        runCatching {
+            val track = await(By.res("radar_slider_track")).visibleBounds
+            val x = track.left + (track.width() * fraction).toInt()
+            val y = track.centerY()
+            emitDiagnostic("wxSeekInjection", "actual rail=$track semantics=$semantics target=($x,$y)")
+            check(device.click(x, y))
+            SystemClock.sleep(500)
+            note("UiDevice actual rail")
+            shell("input touchscreen tap $x $y")
+            SystemClock.sleep(500)
+            note("shell actual rail")
+            device.takeScreenshot(File(output(), "seek-injection-diagnostic.png"))
+        }.onFailure { emitDiagnostic("wxSeekInjection", "rail diagnostic failed: $it") }
     }
     private fun dragScrubber(from: Float, to: Float) {
         play()
