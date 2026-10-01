@@ -145,6 +145,15 @@ internal fun radarTileSet(base: String, frame: RadarFrame): TileSet =
             else "NOAA MRMS / NEXRAD / LibreWXR"
     }
 
+/** Reordering must detach the exact native peer that will be re-added. */
+internal fun raiseRadarImageLayer(style: Style, layer: Layer) {
+    // Removing by ID creates a different Java/native peer in MapLibre 11.8. Reusing the
+    // original peer after that fails with "Cannot add layer twice".
+    check(style.removeLayer(layer)) { "Radar layer could not be detached" }
+    val before = style.layers.firstOrNull { it is SymbolLayer }?.id
+    if (before != null) style.addLayerBelow(layer, before) else style.addLayer(layer)
+}
+
 internal fun isRadarNowcastFresh(scanTime: Long, now: Long): Boolean = now - scanTime in -120L..600L
 
 internal data class RadarFrames(
@@ -1784,11 +1793,7 @@ private class NativeRadarController(
                 val id = "wx-${current!!.key}"
                 val layer = s.getLayer(id)
                 if (layer != null) {
-                    s.removeLayer(id)
-                    s.addLayerBelow(
-                        layer,
-                        s.layers.firstOrNull { it is SymbolLayer }?.id ?: s.layers.last().id,
-                    )
+                    raiseRadarImageLayer(s, layer)
                 }
             }
             if (forecast != null) updateNowcast() else error(null)
@@ -1880,11 +1885,7 @@ private class NativeRadarController(
                 }
                 // A satellite source may have been added since this image layer was cached.
                 s.getLayer("wx-nowcast")?.let { layer ->
-                    s.removeLayer("wx-nowcast")
-                    s.addLayerBelow(
-                        layer,
-                        s.layers.firstOrNull { it is SymbolLayer }?.id ?: s.layers.last().id,
-                    )
+                    raiseRadarImageLayer(s, layer)
                     layer.setProperties(visibility(Property.VISIBLE))
                 }
                 lastNowcastImage = frame.key to result
