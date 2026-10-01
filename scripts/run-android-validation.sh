@@ -2,8 +2,11 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 status=0
-bash scripts/run-radar-layers-preview.sh || status=1
 WX_REQUIRE_SCREENSHOTS=1 sh scripts/run-android-e2e.sh || status=1
+# Run deterministic UI/network regressions before the longer public-feed matrix.
+# The preview harness clears app storage and reseeds its own settings, so its
+# cold-start/cache guarantees do not depend on the earlier debug suite.
+bash scripts/run-radar-layers-preview.sh || status=1
 debug=app/build/outputs/apk/debug/app-debug.apk
 tests=app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 preview=app/build/outputs/apk/preview/app-preview.apk
