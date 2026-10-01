@@ -901,7 +901,7 @@ private fun RadarLegend(
                 RadarScale(field, session.overlay,
                     session.frames.snow || session.frames.frames.firstOrNull()?.source != "mrms", false)
                 val caption = when {
-                    field != null -> if (session.effectiveRange == "now") "Observed · RTMA 2.5 km" else "Forecast · RRFS 3 km"
+                    session.overlay in radarFields -> if (session.effectiveRange == "now") "Observed · RTMA 2.5 km" else "Forecast · RRFS 3 km"
                     session.overlay == "satellite" -> "Brighter = colder cloud tops"
                     session.effectiveRange != "now" -> "in/hr · RRFS simulated"
                     else -> "in/hr · approximate"
@@ -915,7 +915,9 @@ private fun RadarLegend(
 @Composable
 private fun RadarScale(legend: RadarFieldLegend?, overlay: String, snow: Boolean, compact: Boolean) {
     val field = legend?.takeIf { it.stops.size >= 2 && it.stops.all { stop -> stop.first.isFinite() } }
-    if (field == null && overlay == "satellite") return
+    // An unloaded weather field has no valid legend yet. Never show a rain/snow key
+    // underneath a temperature or wind heading while metadata is loading or unavailable.
+    if (field == null && (overlay == "satellite" || overlay in radarFields)) return
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val rainColors =
         listOf(Color.Transparent) +
@@ -1043,7 +1045,7 @@ internal suspend fun loadRadarFrames(
             if (!DisplayCache.isOnline()) throw IOException("Offline")
             val generation = DisplayCache.generation
             val json =
-                withTimeoutOrNull(12_000) { nativeWeatherJson(url, 8_000) }
+                withTimeoutOrNull(12_000) { radarMetadataWithRetry { nativeWeatherJson(url, 8_000) } }
                     ?: throw IOException("Radar metadata request timed out")
             DisplayCache.write(
                 "radar-frames",
@@ -1151,6 +1153,18 @@ internal suspend fun loadRadarFrames(
             savedAt = savedAt,
         )
     }
+
+/** Retry only transient gateways, inside the caller's unchanged overall metadata deadline. */
+internal suspend fun radarMetadataWithRetry(read: suspend () -> JSONObject): JSONObject {
+    var retries = 0
+    while (true) {
+        try { return read() }
+        catch (error: zone.disinfo.wx.data.WeatherHttpException) {
+            if (error.statusCode !in setOf(502, 503, 504) || retries >= 2) throw error
+            delay(if (retries++ == 0) 1_000L else 3_000L)
+        }
+    }
+}
 
 internal suspend fun nativeWeatherJson(url: String, readTimeoutMs: Int = 30_000): JSONObject =
     withContext(Dispatchers.IO) {
