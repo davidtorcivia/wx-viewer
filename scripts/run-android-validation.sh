@@ -12,4 +12,6 @@ bash scripts/run-offline-preview-smoke.sh "$debug" "$tests" "$preview" "$externa
   app/build/outputs/offline-preview || status=1
 bash scripts/run-radar-offline-phases.sh "$debug" "$tests" \
   app/build/outputs/radar-offline-phases || status=1
+bash scripts/run-screen-beauty-device.sh "$debug" "$tests" \
+  app/build/outputs/e2e/device-beauty || status=1
 exit "$status"
