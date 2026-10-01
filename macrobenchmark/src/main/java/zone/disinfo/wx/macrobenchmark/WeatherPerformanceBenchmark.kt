@@ -5,6 +5,7 @@ import android.content.Intent
 import android.graphics.Point
 import android.graphics.Rect
 import android.os.SystemClock
+import android.os.Trace
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.benchmark.macro.CompilationMode
 import androidx.benchmark.macro.FrameTimingMetric
@@ -126,8 +127,9 @@ class WeatherPerformanceBenchmark {
                         By.descContains("Temperature ensemble plume"),
                         heightDp = 250f,
                         requirePlumeTime = true,
+                        fullPlume = true,
                     )
-                scrub(plume)
+                scrub(plume, fullPlume = true)
                 tapTab("Weather")
                 awaitLoadedHero()
             }
@@ -297,7 +299,23 @@ class WeatherPerformanceBenchmark {
                     it.visibleBounds.centerY() > device.displayHeight * .75
                 }
                 .maxByOrNull { it.visibleBounds.centerY() } ?: error("Missing bottom tab: $label")
-        node.click()
+        traced("WxBench/tab/$label") {
+            node.click()
+            if (label == "Plumes") {
+                val deadline = SystemClock.elapsedRealtime() + 15_000
+                do {
+                    val heading =
+                        device.findObjects(By.text("Plumes")).any {
+                            it.visibleBounds.height() > 0 &&
+                                it.visibleBounds.centerY() < device.displayHeight / 2
+                        }
+                    if (heading && device.hasObject(By.text("REFS"))) return@traced
+                    SystemClock.sleep(50)
+                } while (SystemClock.elapsedRealtime() < deadline)
+                captureFailure(device, "full-plumes-not-ready")
+                error("Full Plumes heading and model controls did not become visible")
+            }
+        }
     }
 
     private fun MacrobenchmarkScope.scrollTo(
@@ -305,39 +323,108 @@ class WeatherPerformanceBenchmark {
         heightDp: Float? = null,
         heightPx: Int? = null,
         requirePlumeTime: Boolean = false,
-    ): UiObject2 {
-        val density =
-            InstrumentationRegistry.getInstrumentation().context.resources.displayMetrics.density
-        val targetTop = (device.displayHeight * .30).toInt()
-        repeat(16) {
-            val node = device.findObject(selector)
-            if (node != null) {
-                val b = node.visibleBounds
-                val fullHeight =
-                    heightPx
-                        ?: heightDp?.let { (it * density).roundToInt() }
-                        ?: (b.width() * 612.0 / 600).roundToInt()
-                val viewport = scrollViewport(node)
-                // A complete last chart can be lower than targetTop at the page's scroll limit.
-                // Verify its real geometry and visible readout, not an unreachable screen position.
-                if (
-                    b.height() >= fullHeight - 3 &&
-                        viewport.contains(b) &&
-                        (!requirePlumeTime || plumeTimeNear(b, viewport) != null)
-                )
-                    return node
-                val delta =
-                    (targetTop - b.top).coerceIn(
-                        -device.displayHeight / 3,
-                        device.displayHeight / 3,
-                    )
-                if (delta != 0) scrollPageBy(delta)
-            } else scrollPageBy(-device.displayHeight / 3)
-            SystemClock.sleep(100)
+        fullPlume: Boolean = false,
+    ): UiObject2 =
+        traced("WxBench/seek/${chartKind(selector.toString(), fullPlume)}") {
+            val density =
+                InstrumentationRegistry.getInstrumentation()
+                    .context
+                    .resources
+                    .displayMetrics
+                    .density
+            val targetTop = (device.displayHeight * .30).toInt()
+            val attempts = JSONArray()
+            var direction = -1
+            var priorFingerprint: String? = null
+            var stalled = 0
+            val proof =
+                JSONObject()
+                    .put("selector", selector.toString())
+                    .put("fullPlume", fullPlume)
+                    .put("startElapsedRealtimeNanos", SystemClock.elapsedRealtimeNanos())
+                    .put("attempts", attempts)
+            try {
+                repeat(16) { attempt ->
+                    val node = device.findObject(selector)
+                    val state = JSONObject().put("attempt", attempt)
+                    attempts.put(state)
+                    if (node != null) {
+                        val b = node.visibleBounds
+                        val fullHeight =
+                            heightPx
+                                ?: heightDp?.let { (it * density).roundToInt() }
+                                ?: (b.width() * 612.0 / 600).roundToInt()
+                        val viewport = scrollViewport(node)
+                        val readout = if (requirePlumeTime) plumeTimeNear(b, viewport) else null
+                        state
+                            .put("bounds", b.toShortString())
+                            .put("viewport", viewport.toShortString())
+                            .put("expectedHeight", fullHeight)
+                            .put("readout", readout)
+                        if (
+                            b.height() >= fullHeight - 3 &&
+                                viewport.contains(b) &&
+                                (!requirePlumeTime || readout != null)
+                        ) {
+                            proof.put("result", "passed")
+                            return@traced node
+                        }
+                        val delta =
+                            (targetTop - b.top).coerceIn(
+                                -device.displayHeight / 3,
+                                device.displayHeight / 3,
+                            )
+                        state.put("scrollDelta", delta)
+                        if (delta != 0) scrollPageBy(delta, selector.toString())
+                    } else {
+                        val plots = device.findObjects(By.descContains("ensemble plume"))
+                        val plotDescriptions = plots.map { it.contentDescription }
+                        val labels =
+                            device
+                                .findObjects(By.clazz("android.widget.TextView"))
+                                .filter {
+                                    it.visibleBounds.centerY() in
+                                        device.displayHeight / 5..device.displayHeight * 4 / 5
+                                }
+                                .take(8)
+                                .map { "${it.text}:${it.visibleBounds.toShortString()}" }
+                        val fingerprint =
+                            plots.joinToString {
+                                "${it.contentDescription}:${it.visibleBounds.toShortString()}"
+                            } + labels.joinToString()
+                        stalled = if (fingerprint == priorFingerprint) stalled + 1 else 0
+                        priorFingerprint = fingerprint
+                        // The fixed dry fixture puts Temperature before precipitation/wind.
+                        // A restored later section must be searched upward, not pushed to the end.
+                        if (
+                            fullPlume &&
+                                plotDescriptions.any {
+                                    it.startsWith("Total Precipitation ensemble plume") ||
+                                        it.startsWith("3-Hour Precipitation ensemble plume") ||
+                                        it.startsWith("10m Wind Speed ensemble plume")
+                                }
+                        )
+                            direction = 1
+                        else if (stalled >= 2) {
+                            direction = -direction
+                            stalled = 0
+                        }
+                        state
+                            .put("visiblePlots", JSONArray(plotDescriptions))
+                            .put("visibleLabels", JSONArray(labels))
+                            .put("searchDirection", direction)
+                        scrollPageBy(direction * device.displayHeight / 3, selector.toString())
+                    }
+                    SystemClock.sleep(100)
+                }
+                proof.put("result", "failed")
+                captureFailure(device, "chart-not-visible")
+                error("Complete chart did not enter viewport: $selector")
+            } finally {
+                proof.put("endElapsedRealtimeNanos", SystemClock.elapsedRealtimeNanos())
+                File(outputDirectory(), "chart-seeks.jsonl").appendText(proof.toString() + "\n")
+            }
         }
-        captureFailure(device, "chart-not-visible")
-        error("Complete chart did not enter viewport: $selector")
-    }
 
     private fun scrollViewport(node: UiObject2): Rect {
         var ancestor = node.parent
@@ -363,11 +450,13 @@ class WeatherPerformanceBenchmark {
             ?.text
     }
 
-    private fun MacrobenchmarkScope.scrollPageBy(delta: Int) {
+    private fun MacrobenchmarkScope.scrollPageBy(delta: Int, selector: String) {
         val x = (device.displayWidth / 50).coerceAtLeast(2)
         val start = Point(x, (device.displayHeight * .60).toInt())
         val end = Point(x, start.y + delta)
-        check(device.swipe(arrayOf(start, end, end, end), 20)) { "Page swipe injection failed" }
+        gestureSegment("seek_scroll", selector, if (delta < 0) "up" else "down") {
+            check(device.swipe(arrayOf(start, end, end, end), 20)) { "Page swipe injection failed" }
+        }
     }
 
     private fun MacrobenchmarkScope.swipePage(up: Boolean) {
@@ -378,10 +467,16 @@ class WeatherPerformanceBenchmark {
         val x = (device.displayWidth / 50).coerceAtLeast(2)
         val start = Point(x, if (up) low else high)
         val end = Point(x, if (up) high else low)
-        check(device.swipe(arrayOf(start, end, end, end), 20)) { "Page swipe injection failed" }
+        gestureSegment("vertical_scroll", "Weather", if (up) "up" else "down") {
+            check(device.swipe(arrayOf(start, end, end, end), 20)) { "Page swipe injection failed" }
+        }
     }
 
-    private fun MacrobenchmarkScope.scrub(node: UiObject2, stateProbe: String? = null) {
+    private fun MacrobenchmarkScope.scrub(
+        node: UiObject2,
+        stateProbe: String? = null,
+        fullPlume: Boolean = false,
+    ) {
         var b = node.visibleBounds
         val chartSelector =
             By.descContains(stateProbe ?: node.contentDescription.substringBefore("."))
@@ -405,7 +500,7 @@ class WeatherPerformanceBenchmark {
                     Point(b.right - b.width() / 5, b.centerY()),
                 )
             }
-        fun gesture(points: List<Point>) {
+        fun gesture(points: List<Point>, direction: String) {
             val first = points.first()
             // Two stationary segments are >=240ms in UIAutomator2.3 (24×5ms each),
             // activating the baseline180ms recognizer before identical reversals.
@@ -414,7 +509,13 @@ class WeatherPerformanceBenchmark {
                     points.drop(1) +
                     points.asReversed().drop(1) +
                     points.drop(1)
-            check(device.swipe(motion.toTypedArray(), 25)) { "Chart gesture injection failed" }
+            gestureSegment(
+                "held_scrub",
+                chartKind(stateProbe ?: "ensemble plume", fullPlume),
+                direction,
+            ) {
+                check(device.swipe(motion.toTypedArray(), 25)) { "Chart gesture injection failed" }
+            }
         }
         fun current(): String? =
             if (stateProbe != null) chartState(stateProbe)
@@ -444,7 +545,7 @@ class WeatherPerformanceBenchmark {
         try {
             val before = current()
             proof.put("before", before)
-            gesture(path)
+            gesture(path, "forward")
             val first = observed(before)
             proof.put("first", first)
             b =
@@ -452,13 +553,14 @@ class WeatherPerformanceBenchmark {
                         chartSelector,
                         heightPx = b.height(),
                         requirePlumeTime = stateProbe == null,
+                        fullPlume = fullPlume,
                     )
                     .visibleBounds
             val reversePath = pathFor(b).asReversed()
             proof
                 .put("reverseBounds", b.toShortString())
                 .put("reversePath", JSONArray(reversePath.map { "${it.x},${it.y}" }))
-            gesture(reversePath)
+            gesture(reversePath, "reverse")
             val second = observed(first)
             proof.put("second", second)
             check(first != second) {
@@ -473,6 +575,50 @@ class WeatherPerformanceBenchmark {
             appendSelectionProof(proof)
             captureFailure(device, "scrub-selection-failure")
             throw failure
+        }
+    }
+
+    private fun chartKind(description: String, fullPlume: Boolean): String =
+        when {
+            description.contains("spiral") -> "spiral"
+            description.contains("48 hours") -> "hourly"
+            fullPlume -> "full_plume"
+            else -> "compact_plume"
+        }
+
+    private inline fun <T> traced(name: String, block: () -> T): T {
+        Trace.beginSection(name)
+        try {
+            return block()
+        } finally {
+            Trace.endSection()
+        }
+    }
+
+    private inline fun <T> gestureSegment(
+        kind: String,
+        selector: String,
+        direction: String,
+        block: () -> T,
+    ): T {
+        val start = SystemClock.elapsedRealtimeNanos()
+        try {
+            val label =
+                if (kind == "held_scrub") "$kind/$selector/$direction" else "$kind/$direction"
+            return traced("WxBench/$label") { block() }
+        } finally {
+            val end = SystemClock.elapsedRealtimeNanos()
+            // These delimit input injection, not input-to-present latency or frame ACKs.
+            File(outputDirectory(), "gesture-segments.jsonl")
+                .appendText(
+                    JSONObject()
+                        .put("kind", kind)
+                        .put("selector", selector)
+                        .put("direction", direction)
+                        .put("startElapsedRealtimeNanos", start)
+                        .put("endElapsedRealtimeNanos", end)
+                        .toString() + "\n"
+                )
         }
     }
 
