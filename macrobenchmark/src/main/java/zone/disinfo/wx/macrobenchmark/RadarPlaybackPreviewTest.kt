@@ -16,6 +16,7 @@ import androidx.test.uiautomator.By
 import androidx.test.uiautomator.BySelector
 import androidx.test.uiautomator.Configurator
 import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.UiScrollable
 import androidx.test.uiautomator.UiSelector
@@ -581,21 +582,33 @@ class RadarPlaybackPreviewTest {
     }
 
     private fun selectLayer(layer: String) {
-        val chooser = await(By.res("radar_overlay"))
-        val selected = label(chooser)
+        var selected = ""
+        until(20_000, "open layer chooser") {
+            val chooser = device.findObject(By.res("radar_overlay")) ?: return@until false
+            selected = label(chooser)
+            if (selected != layer) chooser.click()
+            true
+        }
         if (selected == layer) return
-        chooser.click()
         val other = layers.first { it != layer && it != selected && it != "Radar" }
         await(By.text(other))
-        var choice = device.findObjects(By.text(layer)).firstOrNull {
-            it.visibleBounds.height() > 0 && it.visibleBounds.centerY() < device.displayHeight * .85
+        var scrolled = false
+        until(20_000, "choose layer $layer") {
+            val choice = device.findObjects(By.text(layer)).firstOrNull {
+                it.visibleBounds.height() > 0 && it.visibleBounds.centerY() < device.displayHeight * .85
+            }
+            if (choice != null) {
+                choice.click()
+                true
+            } else {
+                if (!scrolled && device.hasObject(By.scrollable(true))) {
+                    check(UiScrollable(UiSelector().scrollable(true)).setAsVerticalList()
+                        .scrollIntoView(UiSelector().text(layer))) { "Missing layer $layer" }
+                    scrolled = true
+                }
+                false
+            }
         }
-        if (choice == null) {
-            check(UiScrollable(UiSelector().scrollable(true)).setAsVerticalList()
-                .scrollIntoView(UiSelector().text(layer))) { "Missing layer $layer" }
-            choice = await(By.text(layer)) { it.visibleBounds.centerY() < device.displayHeight * .85 }
-        }
-        choice.click()
         await(By.res("radar_overlay")) { label(it) == layer }
     }
 
@@ -642,8 +655,25 @@ class RadarPlaybackPreviewTest {
 
     private fun scrub(fraction: Float) {
         val bounds = await(By.res("radar_scrubber")).visibleBounds
-        device.click(bounds.left + (bounds.width() * fraction).toInt(), bounds.centerY())
+        check(device.click(bounds.left + (bounds.width() * fraction).toInt(), bounds.centerY())) {
+            "Physical seek input could not be injected"
+        }
         await(By.desc("Play animation"))
+        // Paused alone cannot prove a seek: earlier taps left the previous paused frame intact.
+        // Inspect the production progress state, allowing the small visual track inset.
+        until(5_000, "seek to ${(fraction * 100).toInt()} percent") {
+            if (device.findObject(By.res("radar_scrubber")) == null) return@until false
+            val state = instrumentation.uiAutomation.rootInActiveWindow
+            fun seekProgress(root: android.view.accessibility.AccessibilityNodeInfo?): Int? {
+                if (root == null) return null
+                if (root.viewIdResourceName == "radar_scrubber")
+                    return root.stateDescription?.toString()?.substringBefore(" percent")?.toIntOrNull()
+                for (index in 0 until root.childCount) seekProgress(root.getChild(index))?.let { return it }
+                return null
+            }
+            val selected = seekProgress(state)
+            selected != null && abs(selected - fraction * 100) <= 3
+        }
     }
     private fun pause() { device.findObject(By.desc("Pause animation"))?.click(); await(By.desc("Play animation")) }
     private fun play() {
@@ -699,7 +729,14 @@ class RadarPlaybackPreviewTest {
     }
     private fun until(timeoutMs: Long, what: String, condition: () -> Boolean) {
         val end = SystemClock.elapsedRealtime() + timeoutMs
-        do { fresh(); if (condition()) return; SystemClock.sleep(150) } while (SystemClock.elapsedRealtime() < end)
+        do {
+            fresh()
+            // Native/Compose updates may invalidate a node between query and property read.
+            // Reacquire within the original deadline; other failures remain real failures.
+            val matched = try { condition() } catch (_: StaleObjectException) { false }
+            if (matched) return
+            SystemClock.sleep(150)
+        } while (SystemClock.elapsedRealtime() < end)
         error("Timed out waiting for $what; package=${device.currentPackageName}; pid=${shell("pidof $target")}")
     }
     private fun emitDiagnostic(key: String, value: String) {

@@ -11,6 +11,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.BySelector
 import androidx.test.uiautomator.Configurator
+import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.UiScrollable
@@ -243,38 +244,45 @@ class RadarLayersPreviewTest {
     }
 
     private fun select(label: String) {
-        freshAccessibility()
-        device.findObject(By.desc("Expand radar legend"))?.click()
-        val chooser = await(By.res("radar_overlay"))
-        val selected = label(chooser)
-        chooser.click()
+        retryFreshUi("expand radar legend") {
+            device.findObject(By.desc("Expand radar legend"))?.click()
+            true
+        }
+        val selected = retryFreshUi("open radar layer menu") {
+            val chooser = device.findObject(By.res("radar_overlay")) ?: return@retryFreshUi null
+            val current = label(chooser)
+            chooser.click()
+            current
+        }
         // Wait for an entry that cannot be the existing selected chip or the bottom tab.
         // A menu that fits the screen is not marked scrollable.
         await(By.text(layers.first { it != label && it != selected && it != "Radar" }))
-        freshAccessibility()
-        var choice = device.findObjects(By.text(label)).firstOrNull {
-            it.visibleBounds.height() > 0 && it.contentDescription != "Choose radar layer" &&
-                it.visibleBounds.centerY() < device.displayHeight * .85
-        }
-        if (choice == null) {
-            await(By.scrollable(true))
-            val menu = UiScrollable(UiSelector().scrollable(true)).setAsVerticalList()
-            check(menu.scrollIntoView(UiSelector().text(label))) { "Missing layer menu item $label" }
-            choice = await(By.text(label)) {
-                it.contentDescription != "Choose radar layer" && it.visibleBounds.centerY() < device.displayHeight * .85
+        var scrolled = false
+        retryFreshUi("select radar layer $label") {
+            val choice = device.findObjects(By.text(label)).firstOrNull {
+                it.visibleBounds.height() > 0 && it.contentDescription != "Choose radar layer" &&
+                    it.visibleBounds.centerY() < device.displayHeight * .85
+            }
+            if (choice != null) {
+                choice.click()
+                true
+            } else {
+                if (!scrolled && device.hasObject(By.scrollable(true))) {
+                    val menu = UiScrollable(UiSelector().scrollable(true)).setAsVerticalList()
+                    check(menu.scrollIntoView(UiSelector().text(label))) { "Missing layer menu item $label" }
+                    scrolled = true
+                }
+                null
             }
         }
-        choice.click()
-        val closedBy = SystemClock.elapsedRealtime() + 5_000
-        do {
-            freshAccessibility()
-            if (device.findObjects(menuItems).count { it.contentDescription != "Choose radar layer" } <= 1) break
-            SystemClock.sleep(50)
-        } while (SystemClock.elapsedRealtime() < closedBy)
-        check(device.findObjects(menuItems).count { it.contentDescription != "Choose radar layer" } <= 1) {
-            "Layer menu did not close"
+        retryFreshUi("radar layer menu closed with $label selected", timeoutMs = 5_000) {
+            // Dismissal invalidates UiObject2 instances between enumeration and inspection.
+            // Retry the entire observation on stale data; never count a stale node as absent.
+            val visibleItems = device.findObjects(menuItems)
+                .count { it.contentDescription != "Choose radar layer" }
+            val chooser = device.findObject(By.res("radar_overlay"))
+            if (visibleItems <= 1 && chooser != null && label(chooser) == label) true else null
         }
-        awaitSelected(label)
     }
 
     private fun awaitSelected(expected: String) = await(By.res("radar_overlay")) {
@@ -332,14 +340,30 @@ class RadarLayersPreviewTest {
         check(device.currentPackageName == target) { "Preview left foreground: ${device.currentPackageName}" }
     }
     private fun await(selector: BySelector, matches: (UiObject2) -> Boolean = { true }): UiObject2 {
-        val end = SystemClock.elapsedRealtime() + 20_000
+        return retryFreshUi("preview UI $selector") {
+            device.findObjects(selector).firstOrNull { it.visibleBounds.height() > 0 && matches(it) }
+        }
+    }
+    private fun <T : Any> retryFreshUi(
+        description: String,
+        timeoutMs: Long = 20_000,
+        query: () -> T?,
+    ): T {
+        val end = SystemClock.elapsedRealtime() + timeoutMs
+        var staleReads = 0
         do {
             freshAccessibility()
-            device.findObjects(selector).firstOrNull { it.visibleBounds.height() > 0 && matches(it) }
-                ?.let { return it }
+            try {
+                query()?.let { return it }
+            } catch (_: StaleObjectException) {
+                // Only an invalidated accessibility snapshot is retryable. Keep the original
+                // deadline and reacquire every node on the next pass; do not mask assertions.
+                staleReads++
+            }
             SystemClock.sleep(100)
         } while (SystemClock.elapsedRealtime() < end)
-        error("Missing preview UI: $selector; pid=${shell("pidof $target")}")
+        error("Timed out waiting for $description after ${timeoutMs}ms; " +
+            "stale accessibility reads=$staleReads; pid=${shell("pidof $target")}")
     }
     private fun shell(command: String) = device.executeShellCommand(command).trim()
     private fun slug(label: String) = label.lowercase().replace(Regex("[^a-z]+"), "-")
