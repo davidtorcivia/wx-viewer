@@ -99,6 +99,24 @@ jobs:
             app/build/outputs/androidTest-results/
             app/build/outputs/connected_android_test_additional_output/
             app/build/outputs/e2e/
+            !app/build/outputs/connected_android_test_additional_output/**/beauty-*
+            !app/build/outputs/e2e/device-beauty/**
+          if-no-files-found: ignore
+      - name: Save screen beauty captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-screen-beauty
+          path: app/build/outputs/connected_android_test_additional_output/**/beauty-*
+          if-no-files-found: ignore
+      - name: Save real-device large-text captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-device-beauty
+          path: |
+            app/build/outputs/e2e/device-beauty/
+            !app/build/outputs/e2e/device-beauty/screenshots.tar
           if-no-files-found: ignore
       - name: Save minified offline and process-death evidence
         if: always()
@@ -108,5 +126,22 @@ jobs:
           path: |
             app/build/outputs/offline-preview/
             app/build/outputs/radar-offline-phases/
+            app/build/outputs/radar-layers-preview/offline-*/
+          if-no-files-found: ignore
+      - name: Save live radar layer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-radar-live-evidence
+          path: |
             app/build/outputs/radar-layers-preview/
+            !app/build/outputs/radar-layers-preview/offline-*/**
+            !app/build/outputs/radar-layers-preview/playback-*/**
+          if-no-files-found: ignore
+      - name: Save sustained radar playback evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-radar-playback-evidence
+          path: app/build/outputs/radar-layers-preview/playback-*/
           if-no-files-found: ignore
