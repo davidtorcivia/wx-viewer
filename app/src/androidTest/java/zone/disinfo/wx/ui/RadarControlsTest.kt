@@ -2,6 +2,7 @@ package zone.disinfo.wx.ui
 
 import android.graphics.Bitmap
 import android.graphics.Color as AndroidColor
+import android.net.Uri
 import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
@@ -264,6 +265,10 @@ class RadarControlsTest {
         val lastPixel = AtomicReference("no snapshot")
         val expected = listOf("#254e70", "#b56576", "#407d63")[index]
         val color = AndroidColor.parseColor(expected)
+        val styleFile = File.createTempFile("radar-native-proof-$index-", ".json",
+            instrumentation.targetContext.cacheDir).apply {
+            writeText("""{"version":8,"sources":{},"layers":[{"id":"native-proof","type":"background","paint":{"background-color":"$expected"}}]}""")
+        }
         val deadline = SystemClock.elapsedRealtime() + 25_000
         val listener = MapView.OnDidFinishRenderingFrameListener { fully, _, _ ->
             if (fully && ready.get() && active.get() &&
@@ -312,7 +317,9 @@ class RadarControlsTest {
             view.addOnDidFinishRenderingFrameListener(listener)
             view.getMapAsync { map ->
                 // Deterministic native GL evidence isolates attachment from public tile availability.
-                map.setStyle(Style.Builder().fromJson("""{"version":8,"sources":{},"layers":[{"id":"native-proof","type":"background","paint":{"background-color":"$expected"}}]}""")) {
+                // MapLibre 11.8 loadJSON leaves an earlier URI request alive; loading another URI
+                // replaces that request so a late basemap response cannot overwrite this fixture.
+                map.setStyle(Style.Builder().fromUri(Uri.fromFile(styleFile).toString())) {
                     ready.set(true)
                     map.triggerRepaint()
                 }
@@ -330,6 +337,7 @@ class RadarControlsTest {
         } finally {
             active.set(false)
             instrumentation.runOnMainSync { view.removeOnDidFinishRenderingFrameListener(listener) }
+            styleFile.delete()
         }
     }
 
