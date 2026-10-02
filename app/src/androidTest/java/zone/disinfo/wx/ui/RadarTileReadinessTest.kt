@@ -112,7 +112,7 @@ class RadarTileReadinessTest {
         readiness.record("source", "b", TileOperation.Cancelled)
         assertTrue(readiness.ready(listOf("source")))
         readiness.clear()
-        assertFalse("Viewport change retires all old coverage", readiness.ready(listOf("source")))
+        assertFalse("Style replacement retires all old coverage", readiness.ready(listOf("source")))
     }
 
     @Test fun newViewportRequestsAndEvictionInvalidatePriorReadiness() {
@@ -125,6 +125,8 @@ class RadarTileReadinessTest {
         assertTrue(readiness.ready(listOf("source")))
         readiness.remove("source")
         assertFalse(readiness.ready(listOf("source")))
+        readiness.record("source", "a", TileOperation.RequestedFromNetwork)
+        assertFalse("An evicted source needs a real new parse, even for a formerly cached tile", readiness.ready(listOf("source")))
         readiness.record("source", "a", TileOperation.EndParse)
         readiness.clear()
         assertFalse(readiness.ready(listOf("source")))
