@@ -437,7 +437,11 @@ internal fun Modifier.reportRadarControlBounds(
     }
     return onGloballyPositioned { coordinates ->
         val bounds = coordinates.boundsInWindow()
-        measured = RadarLabelRect(bounds.left, bounds.top, bounds.right, bounds.bottom)
+        val current = RadarLabelRect(bounds.left, bounds.top, bounds.right, bounds.bottom)
+        measured = current
+        // Layout can change without a subsequent composition. Deliver its new rectangle
+        // here; the SideEffect separately binds the retained rectangle to a late owner.
+        onBounds(key, current)
     }
 }
 
