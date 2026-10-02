@@ -8,12 +8,16 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -49,6 +53,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
@@ -81,6 +86,42 @@ class RadarControlsTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
 
     @Test
+    fun textLineEvidenceRejectsActualClippingWithoutRejectingUnusedParagraphSpace() {
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, 1f)) {
+                WxTheme(ThemeMode.LIGHT) {
+                    Column(Modifier.width(320.dp).testTag("text_ink_fixture")) {
+                        Text("Rain", fontSize = 9.sp, lineHeight = 12.sp,
+                            modifier = Modifier.widthIn(min = 28.dp).heightIn(min = 12.dp).testTag("ink_readable"))
+                        Text("Rain", fontSize = 18.sp, lineHeight = 24.sp,
+                            modifier = Modifier.width(28.dp).height(12.dp).testTag("ink_clipped_legend"))
+                        Text("Saved radar imagery unavailable for this area", fontSize = 12.sp, lineHeight = 16.sp,
+                            modifier = Modifier.width(120.dp).height(12.dp).testTag("ink_clipped_error"))
+                        Text("Retry", fontSize = 12.sp, lineHeight = 16.sp,
+                            modifier = Modifier.height(1.dp).testTag("ink_clipped_retry"))
+                    }
+                }
+            }
+        }
+        save("radar-text-ink-negative-controls",
+            compose.onNodeWithTag("text_ink_fixture").captureToImage().asAndroidBitmap())
+        val evidence = org.json.JSONArray()
+        val failures = mutableListOf<String>()
+        for (tag in listOf("ink_readable", "ink_clipped_legend", "ink_clipped_error", "ink_clipped_retry")) {
+            val layouts = mutableListOf<TextLayoutResult>()
+            compose.onNodeWithTag(tag).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            val layout = layouts.single()
+            evidence.put(layout.inkEvidence().put("tag", tag))
+            if ((tag != "ink_readable") != layout.hasClippedTextLines())
+                failures += "$tag must reflect visible lines rather than unused paragraph allocation"
+        }
+        File(deviceArtifactDirectory(instrumentation.targetContext), "radar-text-ink-negative-controls.json")
+            .writeText(evidence.toString(2))
+        assertTrue(failures.joinToString("\n"), failures.isEmpty())
+    }
+
+    @Test
     fun compactLegendKeepsReadableLabelsAtTwoHundredPercentText() {
         var fontScale by mutableStateOf(1f)
         val session = RadarSession(instrumentation.targetContext, "compact-legend-${System.nanoTime()}",
@@ -96,20 +137,28 @@ class RadarControlsTest {
                 }
             }
         }
+        val failures = mutableListOf<String>()
+        val evidence = org.json.JSONArray()
         for (scale in listOf(1f, 2f)) {
             compose.runOnIdle { fontScale = scale }
+            save("radar-compact-scale-${scale.toInt()}x",
+                compose.onNodeWithTag("radar_compact_scale_fixture").captureToImage().asAndroidBitmap())
             // The real chooser shares the width. Crowded interior ticks may be omitted,
             // but the unit and these separated scale anchors must remain fully readable.
             for (label in listOf("Rain", ".03", ".5", "2")) {
-                val node = compose.onNodeWithText(label).assertIsDisplayed()
-                val layouts = mutableListOf<TextLayoutResult>()
-                node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
-                assertFalse("$label must not clip or wrap at ${scale}x", layouts.single().hasVisualOverflow)
-                assertEquals("$label must stay on one readable line", 1, layouts.single().lineCount)
+                runCatching {
+                    val node = compose.onNodeWithText(label).assertIsDisplayed()
+                    val layouts = mutableListOf<TextLayoutResult>()
+                    node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                    evidence.put(layouts.single().inkEvidence().put("fontScale", scale))
+                    assertFalse("$label must not clip at ${scale}x", layouts.single().hasClippedTextLines())
+                    assertEquals("$label must stay on one readable line", 1, layouts.single().lineCount)
+                }.onFailure { failures += "$scale/$label: $it" }
             }
-            save("radar-compact-scale-${scale.toInt()}x",
-                compose.onNodeWithTag("radar_compact_scale_fixture").captureToImage().asAndroidBitmap())
         }
+        File(deviceArtifactDirectory(instrumentation.targetContext), "radar-compact-scale-text-lines.json")
+            .writeText(evidence.toString(2))
+        assertTrue(failures.joinToString("\n"), failures.isEmpty())
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -256,7 +305,7 @@ class RadarControlsTest {
                     File(deviceArtifactDirectory(instrumentation.targetContext),
                         "radar-controls-$mode-layout.txt").writeText(diagnostics)
                     assertTrue("Frame timestamp is clipped at $mode\n$diagnostics",
-                        layouts.none { it.hasVisualOverflow })
+                        layouts.none { it.hasClippedTextLines() })
                     layouts.forEach { layout ->
                         assertEquals("Timestamp must use theme ink at $mode", expectedInk, layout.layoutInput.style.color)
                     }

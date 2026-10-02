@@ -57,6 +57,7 @@ class RadarConnectivityStatusTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private val context get() = instrumentation.targetContext
     private val offlineCaption = "Offline · Cached map areas only"
+    private val compactLayoutFailures = mutableListOf<String>()
 
     @Test
     fun liveFramesWithoutSnapshotShowOfflineImmediatelyAndRetainPlaybackIntent() {
@@ -157,10 +158,10 @@ class RadarConnectivityStatusTest {
                     assertEquals(desiredPlaying, session.playing)
                     assertNull(session.savedView)
                 }
-                assertCompactErrorClear()
+                checkCompactLayout("$phase-normal")
                 capture("radar-no-snapshot-offline-$phase-compact")
                 changeUi { largeText = true }
-                assertCompactErrorClear()
+                checkCompactLayout("$phase-large")
                 capture("radar-no-snapshot-offline-$phase-compact-large")
                 changeUi { largeText = false }
                 changeUi { compact = false }
@@ -182,11 +183,11 @@ class RadarConnectivityStatusTest {
                 val expandBounds = compose.onNodeWithContentDescription("Open the radar full screen")
                     .fetchSemanticsNode().boundsInRoot
                 assertTrue("Offline age must stay clear of the expand control", statusBounds.right <= expandBounds.left)
-                assertCompactErrorClear()
+                checkCompactLayout("$phase-age-normal")
                 capture("radar-offline-metadata-age-$phase-compact")
                 changeUi { largeText = true }
                 compose.onNodeWithTag("radar_saved_timestamp").assertIsDisplayed().assertTextEquals(agedCaption)
-                assertCompactErrorClear()
+                checkCompactLayout("$phase-age-large")
                 capture("radar-offline-metadata-age-$phase-compact-large")
                 changeUi {
                     largeText = false
@@ -215,6 +216,7 @@ class RadarConnectivityStatusTest {
                 .writeText(JSONObject().put("controlledSessionFrames", true)
                     .put("realConnectivityCallbacks", true).put("manuallyPumpedComposeClock", true)
                     .put("checks", checks).toString(2))
+            assertTrue(compactLayoutFailures.joinToString("\n"), compactLayoutFailures.isEmpty())
         } catch (failure: Throwable) {
             // Preserve the actual failed radio/UI state before cleanup restores connectivity.
             runCatching { capture("radar-no-snapshot-connectivity-failure") }
@@ -282,11 +284,20 @@ class RadarConnectivityStatusTest {
     private fun frameStamp(): String = compose.onNodeWithTag("radar_frame_stamp")
         .fetchSemanticsNode().config[SemanticsProperties.Text].joinToString("") { it.text }
 
-    private fun assertCompactErrorClear() {
+    private fun checkCompactLayout(label: String) {
+        runCatching { assertCompactErrorClear(label) }.onFailure {
+            compactLayoutFailures += "$label: $it"
+            capture("radar-compact-$label-layout-failure")
+        }
+    }
+
+    private fun assertCompactErrorClear(label: String) {
         awaitUi(5_000, "compact unavailable panel") {
             compose.onAllNodes(hasTestTag("radar_error")).fetchSemanticsNodes().isNotEmpty()
         }
-        awaitUi(5_000, "fully measured compact error text") {
+        var lastMetrics = JSONObject()
+        try {
+          awaitUi(5_000, "fully measured compact error text") {
             val layouts = mutableListOf<TextLayoutResult>()
             compose.onNodeWithTag("radar_error_message")
                 .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
@@ -296,9 +307,24 @@ class RadarConnectivityStatusTest {
             val status = compose.onNodeWithTag("radar_saved_timestamp").fetchSemanticsNode().boundsInRoot
             val expand = compose.onNodeWithContentDescription("Open the radar full screen")
                 .fetchSemanticsNode().boundsInRoot
-            layouts.singleOrNull()?.hasVisualOverflow == false && retry.width > 0 && retry.height > 0 &&
+            val retryLayouts = mutableListOf<TextLayoutResult>()
+            compose.onNodeWithText("Retry", useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(retryLayouts) }
+            lastMetrics = JSONObject().put("message", layouts.singleOrNull()?.inkEvidence())
+                .put("retry", retryLayouts.singleOrNull()?.inkEvidence())
+                .put("errorBounds", error.toString()).put("retryBounds", retry.toString())
+                .put("legendBounds", legend.toString()).put("statusBounds", status.toString())
+                .put("expandBounds", expand.toString())
+            layouts.singleOrNull()?.hasClippedTextLines() == false &&
+                retryLayouts.singleOrNull()?.hasClippedTextLines() == false && retry.width > 0 && retry.height > 0 &&
                 error.bottom < legend.top && error.top > maxOf(status.bottom, expand.bottom) &&
                 retry.top >= error.top && retry.bottom <= error.bottom
+          }
+        } catch (failure: Throwable) {
+            throw AssertionError("${failure.message}\n$lastMetrics", failure)
+        } finally {
+            File(deviceArtifactDirectory(context), "radar-compact-$label-text-lines.json")
+                .writeText(lastMetrics.toString(2))
         }
         compose.onNodeWithTag("radar_error_message").assertIsDisplayed()
         compose.onNodeWithText("Retry", useUnmergedTree = true).assertIsDisplayed()
