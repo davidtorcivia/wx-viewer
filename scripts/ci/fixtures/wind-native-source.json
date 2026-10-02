@@ -1,0 +1,21 @@
+{
+  "source": "Actual Android screenrecord decoded pixels, cropped without resizing or color changes",
+  "repository": "davidtorcivia/wx-viewer",
+  "workflowRun": 36964452341,
+  "commit": "024d37d8b1b7be3ae06586c2ba2d984c7dcfdd98",
+  "layer": "Wind",
+  "fontScale": 1.0,
+  "videoSha256": "92eb5b90df9bf939cd238d71c1c43eb1968cf3b90ae235777f7adf1853aeae9a",
+  "mapRegion": {
+    "left": 90,
+    "top": 426,
+    "right": 990,
+    "bottom": 1104
+  },
+  "frames": {
+    "reference": 0,
+    "low-chroma": 260
+  },
+  "interpretation": "Reviewed pixels retain a dark-blue low-wind field, roads and particles. Relative chroma threshold flags cannot distinguish a valid dark palette from opacity loss. This remains inconclusive, never a passing continuity proof.",
+  "attribution": "WX Viewer rendering; MapLibre/OpenFreeMap basemap, OpenStreetMap contributors. Public NYC fixture, not user data."
+}
