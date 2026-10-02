@@ -4,6 +4,15 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      native_video_evidence:
+        description: Capture and analyze all 20 native radar layer/font videos
+        type: boolean
+        required: false
+        default: false
+
+env:
+  WX_NATIVE_VIDEO_EVIDENCE: ${{ github.event_name == 'workflow_dispatch' && inputs.native_video_evidence && 'true' || 'false' }}
 
 permissions:
   contents: read
@@ -50,7 +59,7 @@ jobs:
           bash ./gradlew --build-cache --parallel --max-workers=4
           '-Dorg.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8'
           :app:assembleDebug :app:assembleDebugAndroidTest :app:assemblePreview
-          :macrobenchmark:assembleBenchmark :app:lintDebug
+          :macrobenchmark:assembleBenchmark :macrobenchmark:testPlaybackShapeOracle :app:lintDebug
       - name: Verify preview and record exact package hashes
         run: |
           bash scripts/verify-preview-apk.sh app/build/outputs/apk/preview/app-preview.apk
@@ -111,7 +120,7 @@ jobs:
     name: Device / ${{ matrix.lane }}
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && inputs.native_video_evidence && 45 || 30 }}
     strategy:
       fail-fast: false
       max-parallel: 5
@@ -130,7 +139,7 @@ jobs:
       - name: Verify these are the same build's exact APKs
         run: sha256sum --check apk-sha256.txt
       - name: Install native-video decoder for layer lanes
-        if: startsWith(matrix.lane, 'layers-')
+        if: env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && startsWith(matrix.lane, 'layers-')
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends --yes ffmpeg
@@ -222,7 +231,7 @@ jobs:
             !app/build/outputs/radar-layers-preview/continuity/**
           if-no-files-found: ignore
       - name: Save Temperature normal-text native video
-        if: always() && matrix.lane == 'layers-0'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-0'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-normal-${{ matrix.lane }}-temperature
@@ -245,7 +254,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/temperature-1x-*/**
           if-no-files-found: error
       - name: Save Temperature large-text native video
-        if: always() && matrix.lane == 'layers-0'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-0'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-large-${{ matrix.lane }}-temperature
@@ -268,7 +277,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/temperature-2x-*/**
           if-no-files-found: error
       - name: Save Dew point normal-text native video
-        if: always() && matrix.lane == 'layers-1'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-1'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-normal-${{ matrix.lane }}-dew-point
@@ -291,7 +300,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/dew-point-1x-*/**
           if-no-files-found: error
       - name: Save Dew point large-text native video
-        if: always() && matrix.lane == 'layers-1'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-1'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-large-${{ matrix.lane }}-dew-point
@@ -314,7 +323,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/dew-point-2x-*/**
           if-no-files-found: error
       - name: Save Wind normal-text native video
-        if: always() && matrix.lane == 'layers-2'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-2'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-normal-${{ matrix.lane }}-wind
@@ -337,7 +346,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/wind-1x-*/**
           if-no-files-found: error
       - name: Save Wind large-text native video
-        if: always() && matrix.lane == 'layers-2'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-2'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-large-${{ matrix.lane }}-wind
@@ -360,7 +369,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/wind-2x-*/**
           if-no-files-found: error
       - name: Save Wind gusts normal-text native video
-        if: always() && matrix.lane == 'layers-0'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-0'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-normal-${{ matrix.lane }}-wind-gusts
@@ -383,7 +392,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/wind-gusts-1x-*/**
           if-no-files-found: error
       - name: Save Wind gusts large-text native video
-        if: always() && matrix.lane == 'layers-0'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-0'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-large-${{ matrix.lane }}-wind-gusts
@@ -406,7 +415,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/wind-gusts-2x-*/**
           if-no-files-found: error
       - name: Save Clouds normal-text native video
-        if: always() && matrix.lane == 'layers-1'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-1'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-normal-${{ matrix.lane }}-clouds
@@ -429,7 +438,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/clouds-1x-*/**
           if-no-files-found: error
       - name: Save Clouds large-text native video
-        if: always() && matrix.lane == 'layers-1'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-1'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-large-${{ matrix.lane }}-clouds
@@ -452,7 +461,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/clouds-2x-*/**
           if-no-files-found: error
       - name: Save Precip total normal-text native video
-        if: always() && matrix.lane == 'layers-2'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-2'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-normal-${{ matrix.lane }}-precip-total
@@ -475,7 +484,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/precip-total-1x-*/**
           if-no-files-found: error
       - name: Save Precip total large-text native video
-        if: always() && matrix.lane == 'layers-2'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-2'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-large-${{ matrix.lane }}-precip-total
@@ -498,7 +507,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/precip-total-2x-*/**
           if-no-files-found: error
       - name: Save Snow total normal-text native video
-        if: always() && matrix.lane == 'layers-0'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-0'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-normal-${{ matrix.lane }}-snow-total
@@ -521,7 +530,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/snow-total-1x-*/**
           if-no-files-found: error
       - name: Save Snow total large-text native video
-        if: always() && matrix.lane == 'layers-0'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-0'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-large-${{ matrix.lane }}-snow-total
@@ -544,7 +553,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/snow-total-2x-*/**
           if-no-files-found: error
       - name: Save Radar normal-text native video
-        if: always() && matrix.lane == 'layers-1'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-1'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-normal-${{ matrix.lane }}-radar
@@ -567,7 +576,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/radar-1x-*/**
           if-no-files-found: error
       - name: Save Radar large-text native video
-        if: always() && matrix.lane == 'layers-1'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-1'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-large-${{ matrix.lane }}-radar
@@ -590,7 +599,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/radar-2x-*/**
           if-no-files-found: error
       - name: Save Satellite normal-text native video
-        if: always() && matrix.lane == 'layers-2'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-2'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-normal-${{ matrix.lane }}-satellite
@@ -613,7 +622,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/satellite-1x-*/**
           if-no-files-found: error
       - name: Save Satellite large-text native video
-        if: always() && matrix.lane == 'layers-2'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-2'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-large-${{ matrix.lane }}-satellite
@@ -636,7 +645,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/satellite-2x-*/**
           if-no-files-found: error
       - name: Save Radar + satellite normal-text native video
-        if: always() && matrix.lane == 'layers-0'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-0'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-normal-${{ matrix.lane }}-radar-satellite
@@ -659,7 +668,7 @@ jobs:
             app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/radar-satellite-1x-*/**
           if-no-files-found: error
       - name: Save Radar + satellite large-text native video
-        if: always() && matrix.lane == 'layers-0'
+        if: always() && env.WX_NATIVE_VIDEO_EVIDENCE == 'true' && matrix.lane == 'layers-0'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: android-radar-video-large-${{ matrix.lane }}-radar-satellite
