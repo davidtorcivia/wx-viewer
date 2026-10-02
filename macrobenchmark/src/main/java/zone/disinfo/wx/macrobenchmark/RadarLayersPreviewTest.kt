@@ -36,6 +36,11 @@ class RadarLayersPreviewTest {
         "Precip total", "Snow total", "Radar", "Satellite", "Radar + satellite")
     private val menuItems = By.text(Pattern.compile(layers.filter { it != "Radar" }
         .joinToString("|", "^(", ")$") { Pattern.quote(it) }))
+    // Shard only the independent layer/range sweeps. Keep the full catalog above for
+    // menu detection and the cross-layer interruption stress on shard zero.
+    private val shardCount = args.getString("wxLayerShardCount", "1").toInt().also { require(it in 1..3) }
+    private val shardIndex = args.getString("wxLayerShardIndex", "0").toInt().also { require(it in 0 until shardCount) }
+    private val shardLayers = layers.filterIndexed { index, _ -> index % shardCount == shardIndex }
     private val results = JSONArray()
 
     @Test
@@ -49,7 +54,7 @@ class RadarLayersPreviewTest {
         val failures = mutableListOf<String>()
         try {
             coldStart()
-            for (layer in layers) {
+            for (layer in shardLayers) {
                 try {
                     select(layer)
                     // Both accumulations intentionally start at 36h, as in production.
@@ -112,17 +117,19 @@ class RadarLayersPreviewTest {
                     coldStart()
                 } finally { saveProof(failures) }
             }
-            // Do not wait for one layer's asynchronous grid work before replacing it.
-            repeat(2) { for (layer in layers) select(layer) }
-            select("Temperature")
-            settle("Temperature", 99)
-            val before = shell("pidof $target")
-            coldStart()
-            awaitSelected("Temperature")
-            settle("Temperature", 100)
-            check(shell("pidof $target") != before) { "Cold restart reused the same process" }
-            results.put(JSONObject().put("rapidSwitches", layers.size * 2)
-                .put("coldRestart", true).put("result", "passed"))
+            if (shardIndex == 0) {
+                // Do not wait for one layer's asynchronous grid work before replacing it.
+                repeat(2) { for (layer in layers) select(layer) }
+                select("Temperature")
+                settle("Temperature", 99)
+                val before = shell("pidof $target")
+                coldStart()
+                awaitSelected("Temperature")
+                settle("Temperature", 100)
+                check(shell("pidof $target") != before) { "Cold restart reused the same process" }
+                results.put(JSONObject().put("rapidSwitches", layers.size * 2)
+                    .put("coldRestart", true).put("result", "passed"))
+            }
         } finally { saveProof(failures) }
         check(failures.isEmpty()) { failures.joinToString("\n") }
     }
@@ -145,7 +152,7 @@ class RadarLayersPreviewTest {
             shell("svc data disable")
             SystemClock.sleep(1_000)
             coldStart()
-            for (layer in layers) {
+            for (layer in shardLayers) {
                 select(layer)
                 val ranges = if (layer in listOf("Precip total", "Snow total")) 2 else 3
                 repeat(ranges) { range ->
@@ -407,6 +414,7 @@ class RadarLayersPreviewTest {
     private fun saveProof(failures: List<String>) {
         File(output(), "radar-layers-proof.json").writeText(JSONObject()
             .put("minifiedPreview", true).put("liveServer", "https://sref.disinfo.zone")
+            .put("shardIndex", shardIndex).put("shardCount", shardCount)
             .put("results", results).put("failures", JSONArray(failures)).toString(2))
     }
 }
