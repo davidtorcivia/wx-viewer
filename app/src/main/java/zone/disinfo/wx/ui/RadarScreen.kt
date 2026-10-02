@@ -1550,6 +1550,7 @@ private class NativeRadarController(
     private val tileReadiness = RadarTileReadiness()
     private var nowcastSlot = 0
     private val cached = linkedSetOf<String>()
+    private val rasterInstances = RadarRasterInstances()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val nowcast = NativeRadarNowcast()
     private var nowcastJob: Job? = null
@@ -1742,6 +1743,7 @@ private class NativeRadarController(
         style?.removeSource("$id-source")
         tileReadiness.remove("$id-source")
         cached.remove(id)
+        rasterInstances.retire(id)
         retireOnHide.remove(id)
     }
 
@@ -1786,6 +1788,7 @@ private class NativeRadarController(
         nowcastBusy = false
         style = null
         cached.clear()
+        rasterInstances.clear()
         retireOnHide.clear()
         paintedLayers.clear()
         paintedFrame = null
@@ -1859,6 +1862,7 @@ private class NativeRadarController(
                 }
             }
             cached.clear()
+            rasterInstances.clear()
             retireOnHide.clear()
             paintedLayers.clear()
             paintedFrame = null
@@ -1921,12 +1925,15 @@ private class NativeRadarController(
         try {
             val targets = linkedMapOf<String, Float>()
             for (frame in visible) {
-                val id = "wx-${frame.key}"
+                // MapLibre diffs sources by id/type and coalesces pending render updates.
+                // Reusing a retired id can preserve a decoded RenderSource without any
+                // new tile events, stranding its reset readiness ledger at staging opacity.
+                val id = rasterInstances.forFrame(frame.key)
                 if (s.getLayer(id) == null) {
                     tileReadiness.register("$id-source", radarRasterCoverZoom(
                         map?.cameraPosition?.zoom ?: session.zoom, weatherRasterTileSize(frame), frame.maxZoom))
-                    s.addSource(weatherRasterSource(base, frame))
-                    val layer = weatherRasterLayer(frame, !styleUrl.endsWith("dark"))
+                    s.addSource(weatherRasterSource(base, frame, id))
+                    val layer = weatherRasterLayer(frame, !styleUrl.endsWith("dark"), id)
                     layer.setProperties(rasterOpacity(RADAR_STAGING_OPACITY))
                     val firstLabel = s.layers.firstOrNull { it is SymbolLayer }?.id
                     if (firstLabel != null) s.addLayerBelow(layer, firstLabel) else s.addLayer(layer)
@@ -1941,9 +1948,11 @@ private class NativeRadarController(
             // Moving a cached image is only necessary for a changed satellite/radar pair.
             // Do not detach/re-add a raster on every animation tick.
             if (backdrop != null && current != null && backdrop?.key != current?.key) {
-                val id = "wx-${current!!.key}"
+                val id = rasterInstances.existing(current!!.key)
+                val backgroundId = rasterInstances.existing(backdrop!!.key)
                 val layers = s.layers
-                if (layers.indexOfFirst { it.id == id } < layers.indexOfFirst { it.id == "wx-${backdrop!!.key}" })
+                if (id != null && backgroundId != null &&
+                    layers.indexOfFirst { it.id == id } < layers.indexOfFirst { it.id == backgroundId })
                     s.getLayer(id)?.let { raiseRadarImageLayer(s, it) }
             }
             if (forecast != null) updateNowcast() else {
@@ -2112,11 +2121,15 @@ private class NativeRadarController(
                     s.getLayer(id)?.setProperties(visibility(Property.VISIBLE))
                     backdrop?.let { background ->
                         val layers = s.layers
-                        if (layers.indexOfFirst { it.id == id } < layers.indexOfFirst { it.id == "wx-${background.key}" })
+                        val backgroundId = rasterInstances.existing(background.key)
+                        if (backgroundId != null &&
+                            layers.indexOfFirst { it.id == id } < layers.indexOfFirst { it.id == backgroundId })
                             s.getLayer(id)?.let { raiseRadarImageLayer(s, it) }
                     }
                     val targets = linkedMapOf<String, Float>()
-                    backdrop?.let { targets["wx-${it.key}"] = fieldOpacity(it) }
+                    backdrop?.let { background ->
+                        rasterInstances.existing(background.key)?.let { targets[it] = fieldOpacity(background) }
+                    }
                     targets[id] = .75f
                     stageFrame(targets, latest)
                     lastNowcastImage = latest.key to result
@@ -2279,11 +2292,11 @@ private class NativeRadarController(
     private fun weatherRasterTileSize(frame: RadarFrame) =
         if (frame.field != null) frame.tile else if (frame.satellite) 256 else 512
 
-    private fun weatherRasterSource(server: String, frame: RadarFrame) =
-        RasterSource("wx-${frame.key}-source", radarTileSet(server, frame), weatherRasterTileSize(frame))
+    private fun weatherRasterSource(server: String, frame: RadarFrame, id: String = "wx-${frame.key}") =
+        RasterSource("$id-source", radarTileSet(server, frame), weatherRasterTileSize(frame))
 
-    private fun weatherRasterLayer(frame: RadarFrame, light: Boolean) =
-        RasterLayer("wx-${frame.key}", "wx-${frame.key}-source").withProperties(
+    private fun weatherRasterLayer(frame: RadarFrame, light: Boolean, id: String = "wx-${frame.key}") =
+        RasterLayer(id, "$id-source").withProperties(
             rasterOpacity(fieldOpacity(frame)), rasterFadeDuration(0f),
             rasterBrightnessMax(if (frame.fieldName == "cloud" && light) .6f else 1f))
             .apply { rasterOpacityTransition = TransitionOptions(0, 0) }
