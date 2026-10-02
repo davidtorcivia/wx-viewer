@@ -4,10 +4,16 @@ import android.graphics.Bitmap
 import android.net.ConnectivityManager
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -83,14 +89,20 @@ class RadarConnectivityStatusTest {
             playing = false
         }
         var compact by mutableStateOf(false)
+        var largeText by mutableStateOf(false)
         // The production MRMS loop writes state every 16ms. Automatic "advance until
         // idle" would chase it indefinitely. Pump bounded frames while yielding real
         // wall time so Android connectivity/native-map callbacks can also progress.
         compose.mainClock.autoAdvance = false
         compose.setContent {
-            WxTheme(ThemeMode.LIGHT) {
-                if (compact) CompactRadarPanel(server, place, onExpand = {}, timeZone = "UTC")
-                else RadarScreen(server, place, timeZone = "UTC")
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density,
+                if (largeText) 2f else density.fontScale)) {
+                WxTheme(ThemeMode.LIGHT) {
+                    if (compact) CompactRadarPanel(server, place, onExpand = {}, timeZone = "UTC",
+                        modifier = if (largeText) Modifier.width(320.dp) else Modifier)
+                    else RadarScreen(server, place, timeZone = "UTC")
+                }
             }
         }
         val checks = JSONArray()
@@ -142,7 +154,12 @@ class RadarConnectivityStatusTest {
                     assertEquals(desiredPlaying, session.playing)
                     assertNull(session.savedView)
                 }
+                assertCompactErrorClear()
                 capture("radar-no-snapshot-offline-$phase-compact")
+                changeUi { largeText = true }
+                assertCompactErrorClear()
+                capture("radar-no-snapshot-offline-$phase-compact-large")
+                changeUi { largeText = false }
                 changeUi { compact = false }
                 awaitOfflineCaption()
                 compose.onNodeWithText("OFFLINE").assertIsDisplayed()
@@ -162,8 +179,14 @@ class RadarConnectivityStatusTest {
                 val expandBounds = compose.onNodeWithContentDescription("Open the radar full screen")
                     .fetchSemanticsNode().boundsInRoot
                 assertTrue("Offline age must stay clear of the expand control", statusBounds.right <= expandBounds.left)
+                assertCompactErrorClear()
                 capture("radar-offline-metadata-age-$phase-compact")
+                changeUi { largeText = true }
+                compose.onNodeWithTag("radar_saved_timestamp").assertIsDisplayed().assertTextEquals(agedCaption)
+                assertCompactErrorClear()
+                capture("radar-offline-metadata-age-$phase-compact-large")
                 changeUi {
+                    largeText = false
                     compact = false
                     session.frames = session.frames.copy(savedAt = null)
                 }
@@ -256,6 +279,21 @@ class RadarConnectivityStatusTest {
     private fun frameStamp(): String = compose.onNodeWithTag("radar_frame_stamp")
         .fetchSemanticsNode().config[SemanticsProperties.Text].joinToString("") { it.text }
 
+    private fun assertCompactErrorClear() {
+        awaitUi(5_000, "compact unavailable panel") {
+            compose.onAllNodes(hasTestTag("radar_error")).fetchSemanticsNodes().isNotEmpty()
+        }
+        pumpUi()
+        val error = compose.onNodeWithTag("radar_error").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
+        val legend = compose.onNodeWithTag("radar_compact_legend").fetchSemanticsNode().boundsInRoot
+        val status = compose.onNodeWithTag("radar_saved_timestamp").fetchSemanticsNode().boundsInRoot
+        val expand = compose.onNodeWithContentDescription("Open the radar full screen")
+            .fetchSemanticsNode().boundsInRoot
+        assertTrue("Unavailable panel must stay above the legend: $error, $legend", error.bottom < legend.top)
+        assertTrue("Unavailable panel must stay below status and expand: $error, $status, $expand",
+            error.top > maxOf(status.bottom, expand.bottom))
+    }
+
     private fun networkEvidence(): String = JSONObject()
         .put("availability", NetworkConnectivity.status(context).name)
         .put("visibleStatus", runCatching { statusText() }.getOrNull() ?: JSONObject.NULL)
@@ -272,6 +310,10 @@ class RadarConnectivityStatusTest {
     }
 
     private fun capture(name: String) {
+        // Semantics can update before SurfaceFlinger presents the new frame. Give
+        // draw/presentation bounded wall time so screenshots show the asserted state.
+        pumpFor(160)
+        instrumentation.waitForIdleSync()
         instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
             try {
                 File(deviceArtifactDirectory(context), "$name.png").outputStream().use {
