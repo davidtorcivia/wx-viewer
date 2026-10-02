@@ -199,5 +199,63 @@ class RadarNegativeControlContractTest(unittest.TestCase):
             with self.subTest(code=code), self.assertRaises(AssertionError):
                 self.validator.validate(self.log.replace('STATUS_CODE: -2', 'STATUS_CODE: ' + code), '', self.metrics, lambda _: True)
 
+
+class RadarComparisonSummaryContractTest(unittest.TestCase):
+    def setUp(self):
+        self.module = load('radar_comparison_summary', 'summarize-radar-comparison.py')
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.good = {'schemaVersion': 1, 'passed': True, 'status': 'passed', 'failures': [],
+                     'captures': [{'status': 'passed', 'failures': []} for _ in range(6)]}
+        for leg in ('baseline', 'candidate'):
+            self.write(leg, self.good)
+
+    def write(self, leg, data):
+        path = self.root / leg / 'continuity/continuity-analysis.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data))
+
+    def test_complete_pair_can_pass(self):
+        self.assertTrue(self.module.summarize(self.root, 3, 1)['passed'])
+
+    def test_missing_analysis_is_explicit_inconclusive_without_traceback(self):
+        (self.root / 'baseline/continuity/continuity-analysis.json').unlink()
+        result = self.module.summarize(self.root, 3, 1)
+        self.assertFalse(result['passed'])
+        self.assertEqual(result['status'], 'inconclusive')
+        self.assertEqual(result['failures'][0]['code'], 'missing_or_invalid_evidence')
+        self.assertTrue((self.root / 'comparison.json').is_file())
+
+    def test_missing_ffmpeg_setup_report_cannot_pass(self):
+        self.write('candidate', {'schemaVersion': 1, 'passed': False, 'status': 'inconclusive', 'captures': [],
+                                'failures': [{'code': 'setup_failure', 'message': 'Missing ffmpeg'}]})
+        result = self.module.summarize(self.root, 3, 1)
+        self.assertFalse(result['passed'])
+        self.assertIn('Missing ffmpeg', result['failures'][0]['message'])
+
+    def test_known_visual_baseline_failure_is_retained(self):
+        baseline = copy.deepcopy(self.good)
+        baseline.update(passed=False, status='failed')
+        baseline['captures'][0].update(status='failed', failures=[{'code': 'black_native_view', 'status': 'failed'}])
+        self.write('baseline', baseline)
+        self.assertTrue(self.module.summarize(self.root, 3, 1)['passed'])
+
+    def test_low_cadence_is_not_expected_negative_control(self):
+        baseline = copy.deepcopy(self.good)
+        baseline['captures'][0].update(status='inconclusive', failures=[{'code': 'low_capture_cadence', 'status': 'inconclusive'}])
+        self.write('baseline', baseline)
+        self.assertFalse(self.module.summarize(self.root, 3, 1)['passed'])
+
+    def test_shard_zero_requires_negative_proof(self):
+        self.assertFalse(self.module.summarize(self.root, 3, 0)['passed'])
+
+    def test_corrupt_json_and_schema_are_graceful_failures(self):
+        path = self.root / 'candidate/continuity/continuity-analysis.json'
+        path.write_text('{')
+        self.assertFalse(self.module.summarize(self.root, 3, 1)['passed'])
+        self.write('candidate', {'passed': True, 'captures': self.good['captures'], 'failures': []})
+        self.assertFalse(self.module.summarize(self.root, 3, 1)['passed'])
+
 if __name__ == '__main__':
     unittest.main()
