@@ -94,7 +94,7 @@ internal fun sourceHeadline(
 ): String {
     forecast ?: return ""
     val zone = forecast.timeZone
-    val current = observationRow(forecast)
+    val current = observationRow(forecast, now)
     val night = webSunAltitude(now, place.lat, place.lon) < -.8
     val ahead =
         forecast.hours.filter {
@@ -111,25 +111,18 @@ internal fun sourceHeadline(
         } else
             ahead.firstOrNull(::wetHour)?.let {
                 "${if(it.snowy == true) "Snow" else "Rain"} starting around ${units.hourText(it.timeMillis,zone)}"
-            } ?: "Dry for the next 12 hours"
+            } ?: ""
     val samples = live?.freshMinutes(now).orEmpty()
     val wet = samples.any {
         if (live?.hasTypedRates == true) (it.rateMmH ?: -1.0) >= WET_RATE_MMH
         else (it.dbz ?: -100.0) >= 20
     }
-    val unknown = samples.any {
-        if (live?.hasTypedRates == true)
-            it.rateMmH == null || it.kind == null || it.kind == PrecipKind.UNKNOWN
-        else it.dbz == null
-    }
     val soon =
-        live?.let { sourceLiveHeadline(it, now, units) }
+        live?.takeIf { wet }?.let { sourceLiveHeadline(it, now, units) }
             ?: when {
                 wet -> "Precipitation detected; type or timing is uncertain"
-                unknown -> "Live precipitation outlook incomplete"
                 else -> model
             }
-    val wetSoon = soon.isNotBlank() && !soon.startsWith("Dry")
     val days = forecast.days.filter { it.date != weatherDate(now, zone).toString() }
     fun dayName(day: WeatherDay): String {
         val time = weatherDayTime(day, zone)
@@ -157,13 +150,11 @@ internal fun sourceHeadline(
                     "${kind.replaceFirstChar{it.uppercase()}} likely ${dayName(top)} ($chance%)"
                 chance >= 30 -> "Chance of $kind ${dayName(top)}, $chance%"
                 chance >= 20 -> "Slight chance of $kind ${dayName(top)}, $chance%"
-                days.size < 3 -> ""
-                else ->
-                    "${if(wetSoon) "Dry after that" else "No rain expected"} through ${dayName(days.last())}"
+                else -> ""
             }
         }
     val ongoing =
-        live?.let { nc ->
+        wet && live?.let { nc ->
             nc.rain?.let {
                 (it.startMillis ?: nc.timeMillis) <= now &&
                     (it.endMillis ?: nc.coverageEndsAt) > now
@@ -176,7 +167,7 @@ internal fun sourceHeadline(
                 if (live.rain != null) "" else weatherSky(current.cloud, night)
             else -> weatherCondition(current, night)
         }
-    return listOf(condition, if (outlook.startsWith("No rain")) "" else soon, outlook)
+    return listOf(condition, soon, outlook)
         .filter { it.isNotBlank() }
         .joinToString(". ")
         .let { if (it.isBlank()) it else "$it." }

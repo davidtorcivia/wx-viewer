@@ -19,13 +19,18 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.*
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -33,10 +38,10 @@ import androidx.compose.ui.unit.sp
 @Composable
 internal fun Modifier.radarSurface(shape: Shape = RoundedCornerShape(20.dp)): Modifier {
     val colors = MaterialTheme.colorScheme
-    return shadow(6.dp, shape, ambientColor = Color.Black.copy(alpha = .10f),
-        spotColor = Color.Black.copy(alpha = .08f))
-        .clip(shape).background(colors.surface.copy(alpha = .91f), shape)
-        .border(.5.dp, colors.onSurface.copy(alpha = .10f), shape)
+    return shadow(2.dp, shape, ambientColor = Color.Black.copy(alpha = .06f),
+        spotColor = Color.Black.copy(alpha = .04f))
+        .clip(shape).background(colors.surface.copy(alpha = .80f), shape)
+        .border(.5.dp, colors.onSurface.copy(alpha = .07f), shape)
 }
 
 @Composable
@@ -47,10 +52,10 @@ internal fun RadarIcon(
     modifier: Modifier = Modifier,
     color: Color = MaterialTheme.colorScheme.onSurface,
 ) {
-    Box(modifier.size(44.dp).clip(CircleShape)
+    Box(modifier.size(48.dp).clip(CircleShape)
         .clickable(role = Role.Button, onClick = onClick)
         .semantics { contentDescription = description }, contentAlignment = Alignment.Center) {
-        Icon(image, null, Modifier.size(21.dp), tint = color)
+        Icon(image, null, Modifier.size(20.dp), tint = color)
     }
 }
 
@@ -87,12 +92,14 @@ internal fun RadarTransport(
         }
     } else {
         Column(modifier.radarSurface(RoundedCornerShape(24.dp))
-            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp)
+            .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 6.dp)
             .testTag("radar_transport")) {
             @Composable
             fun status() {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (loading) CircularProgressIndicator(Modifier.padding(end = 6.dp).size(10.dp),
+                    if (loading) CircularProgressIndicator(Modifier.padding(end = 6.dp).size(10.dp)
+                        .testTag("radar_frame_loading")
+                        .semantics { contentDescription = "Loading selected radar frame" },
                         color = muted, strokeWidth = 1.25.dp)
                     Text(badge, fontSize = 9.sp, lineHeight = 12.sp, color = muted, fontWeight = FontWeight.Medium,
                         letterSpacing = .6.sp, maxLines = 1)
@@ -113,9 +120,9 @@ internal fun RadarTransport(
             RadarScrubber(fraction, enabled, onScrub)
             // Independent anchors keep the playback axis exactly at the map's center,
             // regardless of the unequal labels at either side.
-            Box(Modifier.fillMaxWidth().height(44.dp)) {
+            Box(Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                 RadarPill(speed, "Animation speed", onSpeed,
-                    Modifier.align(Alignment.CenterStart))
+                    Modifier.align(Alignment.CenterStart), emphasizeMultiplier = true)
                 RadarPlaybackButton(playing, enabled, onPlay,
                     Modifier.align(Alignment.Center).testTag("radar_playback"))
                 RadarPill(range, "Time range", onRange,
@@ -134,28 +141,31 @@ private fun RadarPlaybackButton(
 ) {
     val ink = MaterialTheme.colorScheme.onSurface
     val paper = MaterialTheme.colorScheme.surface
-    Box(modifier.size(44.dp).clip(CircleShape)
-        .background(ink.copy(alpha = if (enabled) .94f else .32f), CircleShape)
+    Box(modifier.size(48.dp).clip(CircleShape)
         .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
         .semantics {
             contentDescription = if (playing && enabled) "Pause animation" else "Play animation"
             stateDescription = if (!enabled) "No animation available" else if (playing) "Playing" else "Paused"
         }, contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(20.dp)) {
+        Canvas(Modifier.size(40.dp)) {
+            drawCircle(ink.copy(alpha = if (enabled) .94f else .32f))
+            // Keep the ink disk small while the enclosing button retains a 48 dp target.
+            val inset = size.width / 4
+            val glyph = size.width / 2
             if (playing && enabled) {
-                val bar = size.width * .21f
-                val gap = size.width * .19f
+                val bar = glyph * .21f
+                val gap = glyph * .19f
                 val left = (size.width - bar * 2 - gap) / 2
                 for (x in listOf(left, left + bar + gap)) {
-                    drawRoundRect(paper, Offset(x, size.height * .12f),
-                        Size(bar, size.height * .76f), CornerRadius(1.dp.toPx()))
+                    drawRoundRect(paper, Offset(x, inset + glyph * .12f),
+                        Size(bar, glyph * .76f), CornerRadius(1.dp.toPx()))
                 }
             } else {
                 // The triangle's visual centroid, not its bounding box, sits on the axis.
                 val triangle = Path().apply {
-                    moveTo(size.width * .28f, size.height * .12f)
-                    lineTo(size.width * .88f, size.height * .50f)
-                    lineTo(size.width * .28f, size.height * .88f)
+                    moveTo(inset + glyph * .28f, inset + glyph * .12f)
+                    lineTo(inset + glyph * .88f, inset + glyph * .50f)
+                    lineTo(inset + glyph * .28f, inset + glyph * .88f)
                     close()
                 }
                 drawPath(triangle, paper)
@@ -166,13 +176,25 @@ private fun RadarPlaybackButton(
 
 @Composable
 private fun RadarPill(label: String, description: String, onClick: () -> Unit,
-    modifier: Modifier = Modifier) {
-    Box(modifier.defaultMinSize(minWidth = 56.dp, minHeight = 44.dp).clip(CircleShape)
+    modifier: Modifier = Modifier, emphasizeMultiplier: Boolean = false) {
+    // Anybody's multiplication sign is unusually small. Preserve the label (including
+    // accessibility/UI automation text), but give that single glyph a full-size face.
+    val text = remember(label, emphasizeMultiplier) {
+        buildAnnotatedString {
+            if (emphasizeMultiplier && label.endsWith("×")) {
+                append(label.dropLast(1))
+                withStyle(SpanStyle(fontFamily = FontFamily.SansSerif,
+                    fontWeight = FontWeight.Medium, fontSize = 18.sp)) { append("×") }
+            } else append(label)
+        }
+    }
+    Box(modifier.defaultMinSize(minWidth = 56.dp, minHeight = 48.dp).clip(CircleShape)
         .clickable(role = Role.Button, onClick = onClick)
-        .semantics { contentDescription = description }, contentAlignment = Alignment.Center) {
-        Text(label, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.background(MaterialTheme.colorScheme.onSurface.copy(alpha = .045f), CircleShape)
-                .padding(horizontal = 13.dp, vertical = 7.dp))
+        .semantics { contentDescription = description; stateDescription = label },
+        contentAlignment = Alignment.Center) {
+        Text(text, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp,
+            lineHeight = 22.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
     }
 }
 
@@ -217,15 +239,24 @@ internal fun RadarScrubber(value: () -> Float, enabled: Boolean, onValue: (Float
 @Composable
 internal fun RadarDistanceScale(label: String, width: Float, modifier: Modifier = Modifier) {
     val ink = MaterialTheme.colorScheme.onSurface
-    Column(modifier.radarSurface(RoundedCornerShape(9.dp)).padding(horizontal = 8.dp, vertical = 5.dp)
+    val halo = MaterialTheme.colorScheme.surface.copy(alpha = .95f)
+    val haloBlur = with(LocalDensity.current) { 2.dp.toPx() }
+    // Only the glyph/rule gets a halo for satellite legibility. There is no card behind it.
+    Column(modifier.padding(horizontal = 2.dp, vertical = 3.dp)
         .testTag("radar_distance_scale"), horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label, fontSize = 10.sp, lineHeight = 12.sp, color = ink, fontWeight = FontWeight.Medium)
-        Canvas(Modifier.width(width.coerceIn(28f, 96f).dp).height(5.dp)) {
-            val y = size.height - 1.dp.toPx()
-            val weight = 1.dp.toPx()
-            drawLine(ink.copy(alpha = .72f), Offset(0f, y), Offset(size.width, y), weight)
-            drawLine(ink.copy(alpha = .72f), Offset(0f, 0f), Offset(0f, size.height), weight)
-            drawLine(ink.copy(alpha = .72f), Offset(size.width, 0f), Offset(size.width, size.height), weight)
+        Text(label, fontSize = 10.sp, lineHeight = 14.sp, color = ink, fontWeight = FontWeight.Medium,
+            style = MaterialTheme.typography.labelSmall.copy(shadow = Shadow(halo, Offset.Zero, haloBlur)))
+        Canvas(Modifier.width(width.coerceIn(28f, 96f).dp).height(6.dp)) {
+            val inset = 1.5.dp.toPx()
+            val left = 0f
+            val right = size.width
+            val top = inset
+            val bottom = size.height - inset
+            for ((color, weight) in listOf(halo to 3.dp.toPx(), ink.copy(alpha = .85f) to 1.dp.toPx())) {
+                drawLine(color, Offset(left, bottom), Offset(right, bottom), weight, StrokeCap.Round)
+                drawLine(color, Offset(left, top), Offset(left, bottom), weight, StrokeCap.Round)
+                drawLine(color, Offset(right, top), Offset(right, bottom), weight, StrokeCap.Round)
+            }
         }
     }
 }

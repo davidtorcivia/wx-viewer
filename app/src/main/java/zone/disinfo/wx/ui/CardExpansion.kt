@@ -27,6 +27,10 @@ import androidx.compose.ui.unit.dp
 
 private const val CardExpansionDurationMillis = 350
 private val CardExpansionEasing = CubicBezierEasing(.2f, .8f, .2f, 1f)
+// The solar detail is much taller than the other readouts. Ease into its reveal instead of
+// throwing most of a screenful into view in the first few frames. No spring or translation.
+private const val SolarExpansionDurationMillis = 620
+private val SolarExpansionEasing = CubicBezierEasing(.42f, 0f, .25f, 1f)
 
 /** Compose owns interruption and the Android motion-duration scale in both directions. */
 @Composable
@@ -65,12 +69,13 @@ internal fun SwitchingCardDetail(
         modifier = modifier.fillMaxWidth(),
         contentAlignment = Alignment.TopStart,
         transitionSpec = {
-            (fadeIn(tween(CardExpansionDurationMillis, easing = CardExpansionEasing)) togetherWith
-                    fadeOut(tween(CardExpansionDurationMillis, easing = CardExpansionEasing)))
+            val solar = initialState == "sun" || targetState == "sun"
+            val duration = if (solar) SolarExpansionDurationMillis else CardExpansionDurationMillis
+            val easing = if (solar) SolarExpansionEasing else CardExpansionEasing
+            (fadeIn(tween(duration, easing = easing)) togetherWith
+                    fadeOut(tween(duration, easing = easing)))
                 .using(
-                    SizeTransform(clip = true) { _, _ ->
-                        tween(CardExpansionDurationMillis, easing = CardExpansionEasing)
-                    }
+                    SizeTransform(clip = true) { _, _ -> tween(duration, easing = easing) }
                 )
         },
         label = "Condition card detail",

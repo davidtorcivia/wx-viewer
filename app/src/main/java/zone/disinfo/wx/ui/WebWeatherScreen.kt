@@ -368,18 +368,10 @@ fun WebWeatherScreen(
                                     zone,
                                     Modifier.fillMaxWidth().padding(top = 14.dp),
                                     units,
+                                    nowMillis = now,
                                 )
-                            if (
-                                state.rainStatus != null &&
-                                    !state.loading &&
-                                    forecast != null &&
-                                    !showSavedStatus
-                            )
-                                WebText(
-                                    "Live precipitation unavailable",
-                                    11f,
-                                    modifier = Modifier.padding(top = 8.dp),
-                                )
+                            // Quiet when there is no precipitation activity. Feed availability
+                            // remains in the overview's accessible state, not a standing banner.
                         }
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
                             .heightIn(min = stripHeight).align(Alignment.BottomCenter)) {

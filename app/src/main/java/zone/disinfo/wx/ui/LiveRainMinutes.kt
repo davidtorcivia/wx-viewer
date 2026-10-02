@@ -22,8 +22,9 @@ fun LiveRainMinutes(
     zone: String,
     modifier: Modifier = Modifier,
     units: DisplayUnits = Units.IMPERIAL,
+    nowMillis: Long = System.currentTimeMillis(),
 ) {
-    val now = System.currentTimeMillis()
+    val now = nowMillis
     if (nowcast.rain == null || !nowcast.isFresh(now)) return
     val n = nowcast.dbz.size - 1
     val skip = max(0, ((now / 1000.0 - nowcast.timeMillis / 1000.0) / 60).roundToInt())
@@ -40,6 +41,8 @@ fun LiveRainMinutes(
                 else if (nowcast.snow.getOrNull(i) == true) PrecipKind.SNOW else PrecipKind.RAIN
             }
             .distinct()
+    // An event summary can outlive its last wet minute. Do not keep an empty activity plate.
+    if (kinds.isEmpty()) return
     Column(
         modifier.testTag("live_precipitation").semantics {
             contentDescription = "Minute precipitation: " + kinds.joinToString { it.label }

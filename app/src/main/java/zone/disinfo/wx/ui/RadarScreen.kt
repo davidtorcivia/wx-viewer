@@ -17,7 +17,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.MyLocation
 import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.LegendToggle
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -38,6 +38,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -69,6 +70,7 @@ import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.*
 import org.maplibre.android.style.layers.PropertyFactory.*
 import org.maplibre.android.style.sources.*
+import org.maplibre.android.tile.TileOperation
 import zone.disinfo.wx.data.DisplayCache
 import zone.disinfo.wx.data.NetworkAvailability
 import zone.disinfo.wx.data.NetworkConnectivity
@@ -352,7 +354,7 @@ internal suspend fun runRadarPlayback(session: RadarSession, frameWaiting: () ->
         }
 }
 
-private object RadarSessions {
+internal object RadarSessions {
     val sessions = linkedMapOf<String, RadarSession>()
 
     fun get(context: Context, server: String, place: Place): RadarSession {
@@ -439,6 +441,7 @@ private fun RadarView(
     var mapError by remember(session) { mutableStateOf<String?>(null) }
     var tileLoading by remember(session) { mutableStateOf(false) }
     var frameWaiting by remember(session) { mutableStateOf(false) }
+    var paintedFrame by remember(session) { mutableStateOf<RadarFrame?>(null) }
     var controller by remember(session) { mutableStateOf<NativeRadarController?>(null) }
     val network by
         remember(context) { NetworkConnectivity.observe(context) }
@@ -625,6 +628,7 @@ private fun RadarView(
             }
         }
     val frame = frames.getOrNull(index)
+    val displayedFrame = paintedFrame ?: frame
     val latestScan = frames.filter { it.field == null && !it.satellite && it.leadMinutes == 0 }.maxOfOrNull { it.time }
     val delayedRadar = latestScan?.takeIf { wallTime - it > 600 }
         ?.let { "Radar delayed · last scan ${radarClock(it, timeZone, wallTime - it > 86_400)}" }
@@ -699,6 +703,7 @@ private fun RadarView(
             { tileLoading = it },
             { frameWaiting = it },
             { mapError = it },
+            { paintedFrame = it },
             {
                 controller = it
                 it.setControlInset(with(density) { transportHeight.roundToPx() } + (20 * density.density).roundToInt())
@@ -767,7 +772,7 @@ private fun RadarView(
                             session,
                             false,
                             { changeOverlay(it) },
-                            (if (session.legendOpen) Modifier.width(224.dp) else Modifier.wrapContentWidth())
+                            (if (session.legendOpen) Modifier.width(if (density.fontScale > 1.25f) 224.dp else 204.dp) else Modifier.wrapContentWidth())
                                 .testTag("radar_legend"),
                         )
                     }
@@ -789,7 +794,7 @@ private fun RadarView(
                             "Saved ${radarClock(savedAt / 1000, timeZone, true)} · Cached map areas only"
                         delayedRadar != null -> delayedRadar
                         viewportWidth > 480.dp ->
-                            frame?.let {
+                            displayedFrame?.let {
                                 if (it.field != null)
                                     if (it.source == "rtma") "Observed, RTMA"
                                     else "RRFS ${it.cycle}Z run"
@@ -832,14 +837,14 @@ private fun RadarView(
             )
         val stamp = session.savedView?.takeIf { session.showingSavedView }
             ?.let { radarClock(it.frameTime, timeZone, true) }
-            ?: frame?.let { radarClock(it.time, timeZone, it.field != null) }
+            ?: displayedFrame?.let { radarClock(it.time, timeZone, it.field != null) }
             ?: if (loading) "Loading…" else "Unavailable"
         val badge = when {
             session.showingSavedView -> "SAVED"
             network == NetworkAvailability.OFFLINE -> "OFFLINE"
-            frame == null -> ""
-            frame.leadMinutes > 0 -> "FORECAST +${frame.leadMinutes}m"
-            frame.field != null -> if (frame.source == "rtma") "OBSERVED" else "+${frame.forecastHour}h"
+            displayedFrame == null -> ""
+            displayedFrame.leadMinutes > 0 -> "FORECAST +${displayedFrame.leadMinutes}m"
+            displayedFrame.field != null -> if (displayedFrame.source == "rtma") "OBSERVED" else "+${displayedFrame.forecastHour}h"
             else -> "OBSERVED"
         }
         RadarTransport(
@@ -979,24 +984,31 @@ internal fun RadarLegend(
 ) {
     var menu by remember { mutableStateOf(false) }
     val paper = MaterialTheme.colorScheme.surface
+    val ink = MaterialTheme.colorScheme.onSurface
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val field = session.frames.legend
+    val largeType = LocalDensity.current.fontScale > 1.25f
+    val stackedScale = compact && largeType
     Column(modifier.radarSurface(RoundedCornerShape(if (compact || !session.legendOpen) 24.dp else 18.dp))
-        .padding(horizontal = if (compact) 5.dp else 10.dp, vertical = if (compact) 2.dp else 4.dp)) {
+        .padding(horizontal = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(if (compact || !session.legendOpen) Modifier else Modifier.weight(1f)) {
-                Row(Modifier.heightIn(min = 44.dp).clip(CircleShape)
+            Box(if (compact && !stackedScale) Modifier else Modifier.weight(1f, fill = false)) {
+                Row(Modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(20.dp))
                     .clickable(role = Role.Button) { menu = true }
-                    .padding(horizontal = 5.dp).testTag("radar_overlay")
-                    .semantics { contentDescription = "Choose radar layer" },
+                    .padding(horizontal = 8.dp, vertical = 6.dp).testTag("radar_overlay")
+                    .semantics {
+                        contentDescription = "Choose radar layer"
+                        stateDescription = radarOverlays[session.overlay].orEmpty()
+                    },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text(radarOverlays[session.overlay].orEmpty(), color = MaterialTheme.colorScheme.onSurface, fontSize = if (compact) 12.sp else 13.sp, lineHeight = 18.sp,
+                    Text(radarOverlays[session.overlay].orEmpty(), color = ink,
+                        fontSize = if (compact) 12.sp else 13.sp, lineHeight = 18.sp,
                         fontWeight = FontWeight.SemiBold,
-                        maxLines = if (LocalDensity.current.fontScale > 1.25f) 2 else 1,
+                        maxLines = if (largeType) 3 else 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false))
-                    Icon(Icons.Rounded.KeyboardArrowDown, null, Modifier.size(16.dp), tint = muted)
+                    Icon(Icons.Rounded.KeyboardArrowDown, null, Modifier.size(14.dp), tint = muted)
                 }
                 DropdownMenu(menu, { menu = false }, containerColor = paper.copy(alpha = .97f),
                     shape = RoundedCornerShape(18.dp)) {
@@ -1007,20 +1019,31 @@ internal fun RadarLegend(
                     }
                 }
             }
-            if (compact && showScale) Box(Modifier.weight(1f).padding(start = 4.dp, end = 8.dp)) {
+            if (compact && showScale && !stackedScale) Box(Modifier.weight(1f).padding(start = 4.dp, end = 8.dp)) {
                 RadarScale(field, session.overlay, false, true)
             } else if (!compact) {
-                RadarIcon(
-                    if (session.legendOpen) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
-                    if (session.legendOpen) "Collapse radar legend" else "Expand radar legend",
-                    { session.legendOpen = !session.legendOpen; session.save() },
-                    Modifier.size(44.dp).testTag(if (session.legendOpen) "radar_legend_collapse" else "radar_legend_expand"),
-                    muted,
-                )
+                // One quiet key icon belongs to the same header as the layer chooser.
+                // Its small visual weight does not compromise the separate 48 dp target.
+                Box(Modifier.size(48.dp).clip(CircleShape)
+                    .clickable(role = Role.Button) { session.legendOpen = !session.legendOpen; session.save() }
+                    .testTag(if (session.legendOpen) "radar_legend_collapse" else "radar_legend_expand")
+                    .semantics {
+                        contentDescription = if (session.legendOpen) "Collapse radar legend" else "Expand radar legend"
+                        stateDescription = if (session.legendOpen) "Expanded" else "Collapsed"
+                    }, contentAlignment = Alignment.Center) {
+                    Icon(Icons.Rounded.LegendToggle, null, Modifier.size(18.dp),
+                        tint = if (session.legendOpen) ink else muted)
+                }
+            }
+        }
+        if (stackedScale && showScale) {
+            Box(Modifier.padding(start = 8.dp, end = 8.dp, bottom = 8.dp)) {
+                RadarScale(field, session.overlay, false, true)
             }
         }
         if (!compact && session.legendOpen) {
-            Column(Modifier.padding(horizontal = 5.dp).padding(top = 3.dp, bottom = 9.dp)) {
+            Column(Modifier.padding(horizontal = 8.dp).padding(top = 1.dp, bottom = 9.dp)
+                .testTag("radar_legend_scale")) {
                 RadarScale(field, session.overlay,
                     session.frames.snow || session.frames.frames.firstOrNull()?.source != "mrms", false)
                 val caption = when {
@@ -1029,7 +1052,7 @@ internal fun RadarLegend(
                     session.effectiveRange != "now" -> "in/hr · RRFS simulated"
                     else -> "in/hr · approximate"
                 }
-                Text(caption, fontSize = 9.sp, lineHeight = 13.sp, color = muted, modifier = Modifier.padding(top = 5.dp))
+                Text(caption, fontSize = 9.sp, lineHeight = 13.sp, color = muted, modifier = Modifier.padding(top = 3.dp))
             }
         }
     }
@@ -1329,6 +1352,7 @@ private fun NativeRadarMap(
     onLoading: (Boolean) -> Unit,
     onWaiting: (Boolean) -> Unit,
     onError: (String?) -> Unit,
+    onPaintedFrame: (RadarFrame?) -> Unit,
     onController: (NativeRadarController) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1337,6 +1361,7 @@ private fun NativeRadarMap(
     val loadingCallback by rememberUpdatedState(onLoading)
     val waitingCallback by rememberUpdatedState(onWaiting)
     val errorCallback by rememberUpdatedState(onError)
+    val paintedFrameCallback by rememberUpdatedState(onPaintedFrame)
     val light = MaterialTheme.colorScheme.surface.luminance() > 0.5f
     val mapView =
         remember(context, session.key) {
@@ -1354,6 +1379,7 @@ private fun NativeRadarMap(
                 { loadingCallback(it) },
                 { waitingCallback(it) },
                 { errorCallback(it) },
+                { paintedFrameCallback(it) },
             )
         }
     DisposableEffect(mapView, lifecycle) {
@@ -1460,6 +1486,7 @@ private class NativeRadarController(
     private val buffering: (Boolean) -> Unit,
     private val waiting: (Boolean) -> Unit,
     private val error: (String?) -> Unit,
+    private val painted: (RadarFrame?) -> Unit,
 ) {
     private var map: MapLibreMap? = null
     private var style: Style? = null
@@ -1481,6 +1508,19 @@ private class NativeRadarController(
     private var base = ""
     private var current: RadarFrame? = null
     private var backdrop: RadarFrame? = null
+    // A requested frame and a painted frame are different until its native tiles are ready.
+    // Staging with a tiny nonzero opacity keeps the source active without an intermediate
+    // blank frame; opacity zero/visibility none stop MapLibre from requesting its tiles.
+    private var paintedFrame: RadarFrame? = null
+    private val paintedLayers = linkedSetOf<String>()
+    private var pendingLayers: Map<String, Float>? = null
+    private var pendingFrame: RadarFrame? = null
+    private var pendingSince = 0L
+    private var renderedSerial = 0L
+    private var pendingAfterSerial = 0L
+    private var readinessJob: Job? = null
+    private val tileReadiness = RadarTileReadiness()
+    private var nowcastSlot = 0
     private val cached = linkedSetOf<String>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val nowcast = NativeRadarNowcast()
@@ -1541,8 +1581,23 @@ private class NativeRadarController(
             error(radarUnavailable(session.overlay, session.effectiveRange))
         }
     }
+    private val tileAction = MapView.OnTileActionListener { operation, x, y, z, wrap, overscaledZ, sourceId ->
+        if (!disposed && sourceId.startsWith("wx-")) {
+            tileReadiness.record(sourceId, "$z/$x/$y/$wrap/$overscaledZ", operation)
+            if (pendingLayers?.keys?.any { "$it-source" == sourceId } == true) {
+                readinessJob?.cancel()
+                readinessJob = scope.launch {
+                    delay(100)
+                    map?.triggerRepaint()
+                }
+            }
+        }
+    }
     private val rendered = MapView.OnDidFinishRenderingFrameListener { fully, _, _ ->
-        if (fully && !disposed && !nowcastBusy && style != null && acceptRenderedFrame) {
+        renderedSerial++
+        if (!disposed && acceptRenderedFrame && pendingLayers != null) {
+            if (renderedSerial <= pendingAfterSerial || commitPendingFrame(fully)) map?.triggerRepaint()
+        } else if (fully && !disposed && !nowcastBusy && style != null && acceptRenderedFrame) {
             rasterWaitJob?.cancel()
             loading(false)
             if (current != null && session.frames.savedAt == null && DisplayCache.isOnline()) {
@@ -1554,6 +1609,7 @@ private class NativeRadarController(
     }
 
     init {
+        view.addOnTileActionListener(tileAction)
         view.addOnDidFailLoadingMapListener(failed)
         view.addOnDidFinishRenderingFrameListener(rendered)
         view.getMapAsync { ready ->
@@ -1571,6 +1627,9 @@ private class NativeRadarController(
                     )
                 ready.addOnCameraIdleListener(cameraIdle)
                 ready.addOnCameraMoveStartedListener {
+                    // Tile completion/error evidence belongs to the old viewport. Cached
+                    // rasters can still commit via native fully-rendered after a pan.
+                    tileReadiness.clear()
                     windView?.pause()
                     snapshotJob?.cancel()
                     numbersJob?.cancel()
@@ -1622,6 +1681,7 @@ private class NativeRadarController(
         requestedStyleUrl = styleUrl
         val request = ++styleRequest
         rasterWaitJob?.cancel()
+        readinessJob?.cancel()
         styleWaitJob?.cancel()
         styleWaitJob = scope.launch {
             delay(15_000)
@@ -1643,6 +1703,12 @@ private class NativeRadarController(
         nowcastBusy = false
         style = null
         cached.clear()
+        paintedLayers.clear()
+        paintedFrame = null
+        painted(null)
+        pendingLayers = null
+        pendingFrame = null
+        tileReadiness.clear()
         ready.setStyle(Style.Builder().fromUri(styleUrl)) { loaded ->
             if (!disposed && request == styleRequest) {
                 styleWaitJob?.cancel()
@@ -1697,12 +1763,18 @@ private class NativeRadarController(
         if (disposed) return
         if (base != server) {
             style?.let { s ->
-                cached.forEach { id ->
+                (cached + listOf("wx-nowcast-0", "wx-nowcast-1")).forEach { id ->
                     s.removeLayer(id)
                     s.removeSource("$id-source")
                 }
             }
             cached.clear()
+            paintedLayers.clear()
+            paintedFrame = null
+            painted(null)
+            pendingLayers = null
+            pendingFrame = null
+            tileReadiness.clear()
             cancelGridRequests()
             gridCache.clear()
             grid = null
@@ -1710,6 +1782,7 @@ private class NativeRadarController(
             nowcastRequest++
             nowcastJob?.cancel()
             nowcast.clear()
+            lastNowcastImage = null
             nowcastCrop = null
             alertsCenter = null
             style
@@ -1728,51 +1801,68 @@ private class NativeRadarController(
         val s = style ?: return
         if (disposed || base.isBlank()) return
         rasterWaitJob?.cancel()
+        readinessJob?.cancel()
         val request = ++frameRequest
         acceptRenderedFrame = false
         nowcastBusy = false
-        s.getLayer("wx-nowcast")?.setProperties(visibility(Property.NONE))
+        pendingLayers = null
+        pendingFrame = null
         val forecast = current?.takeIf { it.leadMinutes > 0 }
-        val visible =
-            listOfNotNull(backdrop, current?.takeIf { it.leadMinutes == 0 }).distinctBy { it.key }
-        cached.forEach { s.getLayer(it)?.setProperties(visibility(Property.NONE)) }
+        val visible = listOfNotNull(backdrop, current?.takeIf { it.leadMinutes == 0 }).distinctBy { it.key }
+        // Never hide the last painted weather while a replacement is downloading. This
+        // also covers fast scrubs that supersede an in-flight frame.
+        cached.filter { it !in paintedLayers }.forEach {
+            s.getLayer(it)?.setProperties(visibility(Property.NONE))
+        }
         if (visible.isEmpty() && forecast == null) {
+            // An empty replacement dataset is a new layer/range, not another animation
+            // frame. Do not mislabel the previous field as the newly chosen variable.
+            paintedLayers.forEach { s.getLayer(it)?.setProperties(visibility(Property.NONE)) }
+            paintedLayers.clear()
+            paintedFrame = null
+            painted(null)
+            grid = null
+            updateNumbers()
             loading(false)
             return
         }
         loading(true)
         try {
+            val targets = linkedMapOf<String, Float>()
             for (frame in visible) {
                 val id = "wx-${frame.key}"
                 if (s.getLayer(id) == null) {
                     s.addSource(weatherRasterSource(base, frame))
                     val layer = weatherRasterLayer(frame, !styleUrl.endsWith("dark"))
-                    val firstLabel =
-                        s.layers.firstOrNull { it is SymbolLayer }?.id ?: s.layers.last().id
-                    s.addLayerBelow(layer, firstLabel)
+                    layer.setProperties(rasterOpacity(RADAR_STAGING_OPACITY))
+                    val firstLabel = s.layers.firstOrNull { it is SymbolLayer }?.id
+                    if (firstLabel != null) s.addLayerBelow(layer, firstLabel) else s.addLayer(layer)
                     cached.add(id)
                 }
-                s.getLayer(id)?.setProperties(visibility(Property.VISIBLE))
+                s.getLayerAs<RasterLayer>(id)?.setProperties(
+                    visibility(Property.VISIBLE),
+                    rasterOpacity(if (id in paintedLayers) fieldOpacity(frame) else RADAR_STAGING_OPACITY),
+                )
+                targets[id] = fieldOpacity(frame)
             }
-            // Move the selected radar above a satellite background, including a cached frame.
+            // Moving a cached image is only necessary for a changed satellite/radar pair.
+            // Do not detach/re-add a raster on every animation tick.
             if (backdrop != null && current != null && backdrop?.key != current?.key) {
                 val id = "wx-${current!!.key}"
-                val layer = s.getLayer(id)
-                if (layer != null) {
-                    raiseRadarImageLayer(s, layer)
-                }
+                val layers = s.layers
+                if (layers.indexOfFirst { it.id == id } < layers.indexOfFirst { it.id == "wx-${backdrop!!.key}" })
+                    s.getLayer(id)?.let { raiseRadarImageLayer(s, it) }
             }
             if (forecast != null) updateNowcast() else {
+                stageFrame(targets, current)
                 error(null)
-                // A global "fully rendered" event can be absent forever when an unrelated
-                // base-map tile fails. It must not own the radar playback clock.
+                // Keep playback responsive if an unrelated basemap request cannot finish.
+                // This timeout NEVER hides the painted frame or declares tiles ready.
                 rasterWaitJob = scope.launch {
                     delay(1_800)
                     if (!disposed && style === s && request == frameRequest && !nowcastBusy)
                         waiting(false)
                 }
-                // Ignore callbacks already queued before this selection. Native readiness is
-                // advisory only; rendered-image regression tests validate actual imagery.
                 view.post {
                     if (!disposed && style === s && request == frameRequest) {
                         acceptRenderedFrame = true
@@ -1780,20 +1870,70 @@ private class NativeRadarController(
                     }
                 }
             }
-            val keep = visible.map { "wx-${it.key}" }.toSet()
-            while (cached.size > 8) {
-                val oldest = cached.firstOrNull { it !in keep } ?: break
-                s.removeLayer(oldest)
-                s.removeSource("$oldest-source")
-                cached.remove(oldest)
-            }
+            trimRasterCache()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             loading(false)
-            if (Log.isLoggable(RADAR_LOG_TAG, Log.DEBUG))
-                Log.d(RADAR_LOG_TAG, "Map layer failed", e)
+            if (Log.isLoggable(RADAR_LOG_TAG, Log.DEBUG)) Log.d(RADAR_LOG_TAG, "Map layer failed", e)
             error(radarUnavailable(session.overlay, session.effectiveRange))
+        }
+    }
+
+    private fun stageFrame(layers: Map<String, Float>, frame: RadarFrame?) {
+        pendingLayers = layers
+        pendingFrame = frame
+        pendingSince = android.os.SystemClock.uptimeMillis()
+        pendingAfterSerial = renderedSerial + 1
+        // Image sources and already-cached rasters need not emit another tile event.
+        // Guarantee a native draw after the age gate even if unrelated map work keeps
+        // fully=false and the first two draws happen within the same 100 ms window.
+        readinessJob?.cancel()
+        val request = frameRequest
+        readinessJob = radarReadinessRepaint(scope,
+            { !disposed && request == frameRequest && pendingLayers != null },
+            { map?.triggerRepaint() })
+    }
+
+    private fun commitPendingFrame(fully: Boolean): Boolean {
+        val s = style ?: return false
+        val next = pendingLayers ?: return false
+        if (pendingFrame?.key != current?.key || renderedSerial <= pendingAfterSerial) return false
+        val sourceIds = next.keys.filter { !it.startsWith("wx-nowcast-") }.map { "$it-source" }
+        val now = android.os.SystemClock.uptimeMillis()
+        // Native completion is preferred. Source-local parse completion avoids coupling
+        // weather to a broken glyph/basemap request, and is checked after a native draw.
+        if (!fully && !(now - pendingSince >= 100 && tileReadiness.ready(sourceIds))) return false
+        if (tileReadiness.failed(sourceIds)) return false
+        // Show the ready replacement first. Even if native rendering interleaves setters,
+        // there is no interval in which both old and new weather are hidden.
+        next.forEach { (id, opacity) ->
+            s.getLayerAs<RasterLayer>(id)?.setProperties(visibility(Property.VISIBLE), rasterOpacity(opacity))
+        }
+        paintedLayers.filter { it !in next }.forEach { s.getLayer(it)?.setProperties(visibility(Property.NONE)) }
+        paintedLayers.clear()
+        paintedLayers.addAll(next.keys)
+        paintedFrame = pendingFrame
+        painted(paintedFrame)
+        pendingLayers = null
+        pendingFrame = null
+        grid = paintedFrame?.let { gridCache[it.key] }
+        updateNumbers()
+        rasterWaitJob?.cancel()
+        loading(false)
+        trimRasterCache()
+        return true
+    }
+
+    private fun trimRasterCache() {
+        val s = style ?: return
+        val keep = paintedLayers + pendingLayers.orEmpty().keys
+        while (cached.size > 8) {
+            val oldest = cached.firstOrNull { it !in keep } ?: break
+            s.removeLayer(oldest)
+            s.removeSource("$oldest-source")
+            tileReadiness.remove("$oldest-source")
+            cached.remove(oldest)
         }
     }
 
@@ -1821,7 +1961,7 @@ private class NativeRadarController(
         if (desired == null) {
             nowcastRequest++
             nowcastJob?.cancel()
-            s.getLayer("wx-nowcast")?.setProperties(visibility(Property.NONE))
+            // Preserve the last painted image while this viewport has no replacement.
             nowcastBusy = false
             loading(false)
             error("Forecast unavailable here")
@@ -1858,20 +1998,34 @@ private class NativeRadarController(
                     val b = result.bounds
                     val quad = LatLngQuad(LatLng(b.north, b.west), LatLng(b.north, b.east),
                         LatLng(b.south, b.east), LatLng(b.south, b.west))
-                    val existing = s.getSourceAs<ImageSource>("wx-nowcast-source")
+                    // Alternate image sources so setImage cannot empty the image that is
+                    // currently on screen while its replacement uploads to the GPU.
+                    nowcastSlot = if ("wx-nowcast-0" in paintedLayers) 1 else 0
+                    val id = "wx-nowcast-$nowcastSlot"
+                    val sourceId = "$id-source"
+                    val existing = s.getSourceAs<ImageSource>(sourceId)
                     if (existing == null) {
-                        s.addSource(ImageSource("wx-nowcast-source", quad, result.bitmap))
-                        s.addLayerBelow(RasterLayer("wx-nowcast", "wx-nowcast-source")
-                            .withProperties(rasterOpacity(.75f), rasterFadeDuration(0f)),
-                            s.layers.firstOrNull { it is SymbolLayer }?.id ?: s.layers.last().id)
+                        s.addSource(ImageSource(sourceId, quad, result.bitmap))
+                        val layer = RasterLayer(id, sourceId)
+                            .withProperties(rasterOpacity(RADAR_STAGING_OPACITY), rasterFadeDuration(0f))
+                            .apply { rasterOpacityTransition = TransitionOptions(0, 0) }
+                        val before = s.layers.firstOrNull { it is SymbolLayer }?.id
+                        if (before != null) s.addLayerBelow(layer, before) else s.addLayer(layer)
                     } else {
+                        s.getLayerAs<RasterLayer>(id)?.setProperties(rasterOpacity(RADAR_STAGING_OPACITY))
                         existing.setCoordinates(quad)
                         existing.setImage(result.bitmap)
                     }
-                    s.getLayer("wx-nowcast")?.let { layer ->
-                        raiseRadarImageLayer(s, layer)
-                        layer.setProperties(visibility(Property.VISIBLE))
+                    s.getLayer(id)?.setProperties(visibility(Property.VISIBLE))
+                    backdrop?.let { background ->
+                        val layers = s.layers
+                        if (layers.indexOfFirst { it.id == id } < layers.indexOfFirst { it.id == "wx-${background.key}" })
+                            s.getLayer(id)?.let { raiseRadarImageLayer(s, it) }
                     }
+                    val targets = linkedMapOf<String, Float>()
+                    backdrop?.let { targets["wx-${it.key}"] = fieldOpacity(it) }
+                    targets[id] = .75f
+                    stageFrame(targets, latest)
                     lastNowcastImage = latest.key to result
                     imageInstalled = true
                     error(null)
@@ -1898,7 +2052,7 @@ private class NativeRadarController(
      * Capture only the viewed extent, using MapLibre's ambient resources and original attribution.
      */
     private fun saveOfflineView() {
-        val frame = current ?: return
+        val frame = paintedFrame?.takeIf { it.key == current?.key } ?: return
         val ready = map ?: return
         val loaded = style ?: return
         val now = System.currentTimeMillis()
@@ -2037,6 +2191,7 @@ private class NativeRadarController(
         RasterLayer("wx-${frame.key}", "wx-${frame.key}-source").withProperties(
             rasterOpacity(fieldOpacity(frame)), rasterFadeDuration(0f),
             rasterBrightnessMax(if (frame.fieldName == "cloud" && light) .6f else 1f))
+            .apply { rasterOpacityTransition = TransitionOptions(0, 0) }
 
     private fun fieldOpacity(frame: RadarFrame): Float =
         when (frame.fieldName) {
@@ -2180,7 +2335,7 @@ private class NativeRadarController(
                 return
             }
         }
-        val currentFrame = current ?: return
+        val currentFrame = paintedFrame ?: return
         pin(point)
         session.inspection =
             RadarInspection(point.latitude, point.longitude, listOf("Loading…"), pixel.x, pixel.y)
@@ -2275,9 +2430,7 @@ private class NativeRadarController(
     }
 
     private fun syncGrid(frame: RadarFrame?) {
-        grid = frame?.let { gridCache[it.key] }
-        updateNumbers()
-        if (frame?.grid == null || grid != null || gridJobs[frame.key]?.isActive == true) return
+        if (frame?.grid == null || gridCache[frame.key] != null || gridJobs[frame.key]?.isActive == true) return
         val server = base
         val generation = DisplayCache.generation
         val requestGeneration = gridGeneration
@@ -2291,7 +2444,7 @@ private class NativeRadarController(
                     gridCache[frame.key] = loaded
                     while (gridCache.size > 8 || gridCache.values.sumOf { it.bytes.size.toLong() } > 24L * 1024 * 1024)
                         gridCache.remove(gridCache.keys.first())
-                    if (current?.key == frame.key) {
+                    if (paintedFrame?.key == frame.key) {
                         grid = loaded
                         updateNumbers()
                     }
@@ -2299,7 +2452,7 @@ private class NativeRadarController(
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                if (!disposed && current?.key == frame.key && base == server && requestGeneration == gridGeneration) {
+                if (!disposed && paintedFrame?.key == frame.key && base == server && requestGeneration == gridGeneration) {
                     grid = null
                     updateNumbers()
                 }
@@ -2483,9 +2636,10 @@ private class NativeRadarController(
                         ),
                         textHaloWidth(1.4f),
                     )
-            val before =
-                s.layers.firstOrNull { it is SymbolLayer && it.id != "wx-numbers-label" }?.id
-            if (before != null) s.addLayerBelow(layer, before) else s.addLayer(layer)
+            // Basemap styles interleave road lines and symbols. "Before first symbol"
+            // can still be below a later bridge/road. Weather values belong above the
+            // entire basemap so no road can strike through their glyphs or halos.
+            addRadarNumbersLayer(s, layer)
         }
     }
 
@@ -2509,6 +2663,7 @@ private class NativeRadarController(
         disposed = true
         snapshotJob?.cancel()
         rasterWaitJob?.cancel()
+        readinessJob?.cancel()
         styleWaitJob?.cancel()
         nowcastJob?.cancel()
         cancelGridRequests()
@@ -2520,6 +2675,7 @@ private class NativeRadarController(
         scope.cancel()
         nowcast.clear()
         map?.removeOnCameraIdleListener(cameraIdle)
+        view.removeOnTileActionListener(tileAction)
         view.removeOnDidFailLoadingMapListener(failed)
         view.removeOnDidFinishRenderingFrameListener(rendered)
         style = null

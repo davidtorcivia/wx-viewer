@@ -218,7 +218,7 @@ private fun chartF(v: Double, units: DisplayUnits) =
 internal fun chartRain(v: Double, units: DisplayUnits) = units.precip(v)
 
 internal fun chartWind(hour: WeatherHour, units: DisplayUnits): String {
-    val value = hour.windMph ?: 0.0
+    val value = hour.windMph ?: return "unavailable"
     val gust = hour.gustMph?.takeIf { it - value >= 5 }
     val unitValue = units.toWind(value)
     val tail = gust?.let { ", gusts ${units.toWind(it).roundToInt()}" }.orEmpty()
@@ -571,8 +571,8 @@ fun WebHourlyChart(
         val ht = if (narrow) 220f else 340f
         val cloudH = if (narrow) 36f else 44f
         val windH = if (narrow) 72f else 96f
-        val c0 = ht + 22 + 26
-        val w0 = c0 + cloudH + 26
+        val c0 = ht + 22 + 12
+        val w0 = c0 + cloudH + 16
         val total = w0 + windH + 26
         val left = 40f
         val right = if (narrow) 30f else 64f
@@ -583,10 +583,19 @@ fun WebHourlyChart(
                 .height(total.dp)
                 .testTag("web_hourly_chart")
                 .semantics {
-                    contentDescription = "Temperature and wind for the next 48 hours"
+                    contentDescription =
+                        "Temperature, cloud cover, precipitation and wind in ${units.windLabel} for the next 48 hours"
                     stateDescription =
                         selectedTime?.let {
-                            "Selected ${chartWeekday(it, zone, nowMillis)} ${chartHour(it, zone, units = units)}"
+                            val row = rows.firstOrNull { hour ->
+                                it >= hour.timeMillis && it < hour.timeMillis + CHART_HOUR
+                            }
+                            listOfNotNull(
+                                "Selected ${chartWeekday(it, zone, nowMillis)} ${chartHour(it, zone, units = units)}",
+                                row?.let { hour -> degrees(hour.tempF, units) },
+                                row?.cloud?.let { cloud -> "${cloud.roundToInt()} percent cloud cover" },
+                                row?.let { hour -> "Wind ${chartWind(hour, units)}" },
+                            ).joinToString(", ")
                         } ?: "Current forecast"
                 }
                 .webScrub(rows, { select(it) }) { point, width, _ ->
@@ -763,7 +772,6 @@ fun WebHourlyChart(
                     }
                 }
             }
-            canvas.drawText("Cloud cover", 0f, c0 - 4, chartTextPaint(face, ink.toArgb(), 13f, 700))
             canvas.drawRect(left, c0, width - right, c0 + cloudH, fill(alpha(ink, .06f)))
             rows.forEach { r ->
                 r.cloud?.let { v ->
@@ -777,12 +785,6 @@ fun WebHourlyChart(
                     )
                 }
             }
-            canvas.drawText(
-                "Wind, ${units.windLabel}",
-                0f,
-                w0 - 4,
-                chartTextPaint(face, ink.toArgb(), 13f, 700),
-            )
             val windColor = webOklch(if (dark) .74 else .56, .09, 175.0).toArgb()
             val every = if (narrow) 3 else if (bw < 12) 2 else 1
             val wy = w0 + windH / 2 - 8
