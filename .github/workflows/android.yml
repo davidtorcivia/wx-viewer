@@ -219,23 +219,467 @@ jobs:
             app/build/outputs/radar-layers-preview/
             !app/build/outputs/radar-layers-preview/offline-*/**
             !app/build/outputs/radar-layers-preview/playback-*/**
-            !app/build/outputs/radar-layers-preview/**/*.mp4
+            !app/build/outputs/radar-layers-preview/continuity/**
           if-no-files-found: ignore
-      - name: Save normal-text sequential native radar videos
-        if: always() && startsWith(matrix.lane, 'layers-')
+      - name: Save Temperature normal-text native video
+        if: always() && matrix.lane == 'layers-0'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: android-radar-video-normal-${{ matrix.lane }}
+          name: android-radar-video-normal-${{ matrix.lane }}-temperature
           compression-level: 0
-          path: app/build/outputs/radar-layers-preview/continuity/font-1.0/*.mp4
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-temperature.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-temperature.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-temperature-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-temperature-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-temperature-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-temperature-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-temperature-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-temperature-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-temperature-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-temperature-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/temperature-1x-*/**
           if-no-files-found: error
-      - name: Save large-text sequential native radar videos
-        if: always() && startsWith(matrix.lane, 'layers-')
+      - name: Save Temperature large-text native video
+        if: always() && matrix.lane == 'layers-0'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: android-radar-video-large-${{ matrix.lane }}
+          name: android-radar-video-large-${{ matrix.lane }}-temperature
           compression-level: 0
-          path: app/build/outputs/radar-layers-preview/continuity/font-2.0/*.mp4
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-temperature.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-temperature.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-temperature-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-temperature-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-temperature-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-temperature-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-temperature-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-temperature-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-temperature-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-temperature-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/temperature-2x-*/**
+          if-no-files-found: error
+      - name: Save Dew point normal-text native video
+        if: always() && matrix.lane == 'layers-1'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-normal-${{ matrix.lane }}-dew-point
+          compression-level: 0
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-dew-point.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-dew-point.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-dew-point-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-dew-point-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-dew-point-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-dew-point-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-dew-point-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-dew-point-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-dew-point-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-dew-point-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/dew-point-1x-*/**
+          if-no-files-found: error
+      - name: Save Dew point large-text native video
+        if: always() && matrix.lane == 'layers-1'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-large-${{ matrix.lane }}-dew-point
+          compression-level: 0
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-dew-point.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-dew-point.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-dew-point-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-dew-point-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-dew-point-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-dew-point-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-dew-point-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-dew-point-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-dew-point-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-dew-point-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/dew-point-2x-*/**
+          if-no-files-found: error
+      - name: Save Wind normal-text native video
+        if: always() && matrix.lane == 'layers-2'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-normal-${{ matrix.lane }}-wind
+          compression-level: 0
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/wind-1x-*/**
+          if-no-files-found: error
+      - name: Save Wind large-text native video
+        if: always() && matrix.lane == 'layers-2'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-large-${{ matrix.lane }}-wind
+          compression-level: 0
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/wind-2x-*/**
+          if-no-files-found: error
+      - name: Save Wind gusts normal-text native video
+        if: always() && matrix.lane == 'layers-0'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-normal-${{ matrix.lane }}-wind-gusts
+          compression-level: 0
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind-gusts.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind-gusts.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind-gusts-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind-gusts-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind-gusts-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind-gusts-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind-gusts-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind-gusts-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind-gusts-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-wind-gusts-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/wind-gusts-1x-*/**
+          if-no-files-found: error
+      - name: Save Wind gusts large-text native video
+        if: always() && matrix.lane == 'layers-0'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-large-${{ matrix.lane }}-wind-gusts
+          compression-level: 0
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind-gusts.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind-gusts.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind-gusts-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind-gusts-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind-gusts-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind-gusts-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind-gusts-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind-gusts-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind-gusts-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-wind-gusts-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/wind-gusts-2x-*/**
+          if-no-files-found: error
+      - name: Save Clouds normal-text native video
+        if: always() && matrix.lane == 'layers-1'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-normal-${{ matrix.lane }}-clouds
+          compression-level: 0
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-clouds.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-clouds.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-clouds-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-clouds-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-clouds-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-clouds-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-clouds-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-clouds-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-clouds-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-clouds-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/clouds-1x-*/**
+          if-no-files-found: error
+      - name: Save Clouds large-text native video
+        if: always() && matrix.lane == 'layers-1'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-large-${{ matrix.lane }}-clouds
+          compression-level: 0
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-clouds.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-clouds.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-clouds-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-clouds-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-clouds-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-clouds-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-clouds-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-clouds-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-clouds-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-clouds-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/clouds-2x-*/**
+          if-no-files-found: error
+      - name: Save Precip total normal-text native video
+        if: always() && matrix.lane == 'layers-2'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-normal-${{ matrix.lane }}-precip-total
+          compression-level: 0
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-precip-total.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-precip-total.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-precip-total-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-precip-total-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-precip-total-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-precip-total-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-precip-total-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-precip-total-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-precip-total-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-precip-total-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/precip-total-1x-*/**
+          if-no-files-found: error
+      - name: Save Precip total large-text native video
+        if: always() && matrix.lane == 'layers-2'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-large-${{ matrix.lane }}-precip-total
+          compression-level: 0
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-precip-total.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-precip-total.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-precip-total-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-precip-total-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-precip-total-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-precip-total-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-precip-total-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-precip-total-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-precip-total-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-precip-total-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/precip-total-2x-*/**
+          if-no-files-found: error
+      - name: Save Snow total normal-text native video
+        if: always() && matrix.lane == 'layers-0'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-normal-${{ matrix.lane }}-snow-total
+          compression-level: 0
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-snow-total.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-snow-total.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-snow-total-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-snow-total-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-snow-total-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-snow-total-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-snow-total-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-snow-total-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-snow-total-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-snow-total-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/snow-total-1x-*/**
+          if-no-files-found: error
+      - name: Save Snow total large-text native video
+        if: always() && matrix.lane == 'layers-0'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-large-${{ matrix.lane }}-snow-total
+          compression-level: 0
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-snow-total.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-snow-total.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-snow-total-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-snow-total-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-snow-total-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-snow-total-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-snow-total-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-snow-total-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-snow-total-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-snow-total-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/snow-total-2x-*/**
+          if-no-files-found: error
+      - name: Save Radar normal-text native video
+        if: always() && matrix.lane == 'layers-1'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-normal-${{ matrix.lane }}-radar
+          compression-level: 0
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/radar-1x-*/**
+          if-no-files-found: error
+      - name: Save Radar large-text native video
+        if: always() && matrix.lane == 'layers-1'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-large-${{ matrix.lane }}-radar
+          compression-level: 0
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/radar-2x-*/**
+          if-no-files-found: error
+      - name: Save Satellite normal-text native video
+        if: always() && matrix.lane == 'layers-2'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-normal-${{ matrix.lane }}-satellite
+          compression-level: 0
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-satellite.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-satellite.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-satellite-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-satellite-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-satellite-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-satellite-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-satellite-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-satellite-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-satellite-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-satellite-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/satellite-1x-*/**
+          if-no-files-found: error
+      - name: Save Satellite large-text native video
+        if: always() && matrix.lane == 'layers-2'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-large-${{ matrix.lane }}-satellite
+          compression-level: 0
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-satellite.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-satellite.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-satellite-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-satellite-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-satellite-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-satellite-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-satellite-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-satellite-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-satellite-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-satellite-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/satellite-2x-*/**
+          if-no-files-found: error
+      - name: Save Radar + satellite normal-text native video
+        if: always() && matrix.lane == 'layers-0'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-normal-${{ matrix.lane }}-radar-satellite
+          compression-level: 0
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar-satellite.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar-satellite.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar-satellite-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar-satellite-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar-satellite-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar-satellite-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar-satellite-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar-satellite-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar-satellite-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-radar-satellite-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-1.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/radar-satellite-1x-*/**
+          if-no-files-found: error
+      - name: Save Radar + satellite large-text native video
+        if: always() && matrix.lane == 'layers-0'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-large-${{ matrix.lane }}-radar-satellite
+          compression-level: 0
+          path: |
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar-satellite.mp4
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar-satellite.capture.json
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar-satellite-before.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar-satellite-after.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar-satellite-failure.png
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar-satellite-failure.xml
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar-satellite-screenrecord.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar-satellite-launch.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar-satellite-probe.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-radar-satellite-stop.sh
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/instrumentation.log
+            app/build/outputs/radar-layers-preview/continuity/font-2.0/continuity-capture-proof.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis.json
+            app/build/outputs/radar-layers-preview/continuity/continuity-status.txt
+            app/build/outputs/radar-layers-preview/continuity/continuity-analysis-frames/radar-satellite-2x-*/**
           if-no-files-found: error
       - name: Save sustained radar playback evidence
         if: always() && matrix.lane == 'playback'

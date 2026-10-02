@@ -58,7 +58,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2]
+        shard: [0, 1, 2, 3, 4]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -90,7 +90,7 @@ jobs:
       - name: Capture every layer at normal and 200-percent text
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         env:
-          WX_LAYER_SHARD_COUNT: '3'
+          WX_LAYER_SHARD_COUNT: '5'
           WX_LAYER_SHARD_INDEX: ${{ matrix.shard }}
         with:
           api-level: 35
@@ -115,38 +115,926 @@ jobs:
           compression-level: 1
           path: |
             continuity-results/
-            !continuity-results/**/*.mp4
+            !continuity-results/**/continuity/**
             continuity-build/
           if-no-files-found: error
-      - name: Save baseline normal-text native video
-        if: always()
+      - name: Save baseline Temperature normal-text native video
+        if: always() && matrix.shard == 0
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-radar-baseline-normal-shard-${{ matrix.shard }}
+          name: native-radar-baseline-normal-shard-${{ matrix.shard }}-temperature
           compression-level: 0
-          path: continuity-results/baseline/continuity/font-1.0/*.mp4
+          path: |
+            continuity-results/baseline/continuity/font-1.0/continuity-temperature.mp4
+            continuity-results/baseline/continuity/font-1.0/continuity-temperature.capture.json
+            continuity-results/baseline/continuity/font-1.0/continuity-temperature-before.png
+            continuity-results/baseline/continuity/font-1.0/continuity-temperature-after.png
+            continuity-results/baseline/continuity/font-1.0/continuity-temperature-failure.png
+            continuity-results/baseline/continuity/font-1.0/continuity-temperature-failure.xml
+            continuity-results/baseline/continuity/font-1.0/continuity-temperature-screenrecord.log
+            continuity-results/baseline/continuity/font-1.0/continuity-temperature-launch.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-temperature-probe.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-temperature-stop.sh
+            continuity-results/baseline/continuity/font-1.0/instrumentation.log
+            continuity-results/baseline/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/temperature-1x-*/**
           if-no-files-found: error
-      - name: Save baseline large-text native video
-        if: always()
+      - name: Save baseline Temperature large-text native video
+        if: always() && matrix.shard == 0
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-radar-baseline-large-shard-${{ matrix.shard }}
+          name: native-radar-baseline-large-shard-${{ matrix.shard }}-temperature
           compression-level: 0
-          path: continuity-results/baseline/continuity/font-2.0/*.mp4
+          path: |
+            continuity-results/baseline/continuity/font-2.0/continuity-temperature.mp4
+            continuity-results/baseline/continuity/font-2.0/continuity-temperature.capture.json
+            continuity-results/baseline/continuity/font-2.0/continuity-temperature-before.png
+            continuity-results/baseline/continuity/font-2.0/continuity-temperature-after.png
+            continuity-results/baseline/continuity/font-2.0/continuity-temperature-failure.png
+            continuity-results/baseline/continuity/font-2.0/continuity-temperature-failure.xml
+            continuity-results/baseline/continuity/font-2.0/continuity-temperature-screenrecord.log
+            continuity-results/baseline/continuity/font-2.0/continuity-temperature-launch.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-temperature-probe.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-temperature-stop.sh
+            continuity-results/baseline/continuity/font-2.0/instrumentation.log
+            continuity-results/baseline/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/temperature-2x-*/**
           if-no-files-found: error
-      - name: Save candidate normal-text native video
-        if: always()
+      - name: Save candidate Temperature normal-text native video
+        if: always() && matrix.shard == 0
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-radar-candidate-normal-shard-${{ matrix.shard }}
+          name: native-radar-candidate-normal-shard-${{ matrix.shard }}-temperature
           compression-level: 0
-          path: continuity-results/candidate/continuity/font-1.0/*.mp4
+          path: |
+            continuity-results/candidate/continuity/font-1.0/continuity-temperature.mp4
+            continuity-results/candidate/continuity/font-1.0/continuity-temperature.capture.json
+            continuity-results/candidate/continuity/font-1.0/continuity-temperature-before.png
+            continuity-results/candidate/continuity/font-1.0/continuity-temperature-after.png
+            continuity-results/candidate/continuity/font-1.0/continuity-temperature-failure.png
+            continuity-results/candidate/continuity/font-1.0/continuity-temperature-failure.xml
+            continuity-results/candidate/continuity/font-1.0/continuity-temperature-screenrecord.log
+            continuity-results/candidate/continuity/font-1.0/continuity-temperature-launch.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-temperature-probe.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-temperature-stop.sh
+            continuity-results/candidate/continuity/font-1.0/instrumentation.log
+            continuity-results/candidate/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/temperature-1x-*/**
           if-no-files-found: error
-      - name: Save candidate large-text native video
-        if: always()
+      - name: Save candidate Temperature large-text native video
+        if: always() && matrix.shard == 0
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: native-radar-candidate-large-shard-${{ matrix.shard }}
+          name: native-radar-candidate-large-shard-${{ matrix.shard }}-temperature
           compression-level: 0
-          path: continuity-results/candidate/continuity/font-2.0/*.mp4
+          path: |
+            continuity-results/candidate/continuity/font-2.0/continuity-temperature.mp4
+            continuity-results/candidate/continuity/font-2.0/continuity-temperature.capture.json
+            continuity-results/candidate/continuity/font-2.0/continuity-temperature-before.png
+            continuity-results/candidate/continuity/font-2.0/continuity-temperature-after.png
+            continuity-results/candidate/continuity/font-2.0/continuity-temperature-failure.png
+            continuity-results/candidate/continuity/font-2.0/continuity-temperature-failure.xml
+            continuity-results/candidate/continuity/font-2.0/continuity-temperature-screenrecord.log
+            continuity-results/candidate/continuity/font-2.0/continuity-temperature-launch.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-temperature-probe.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-temperature-stop.sh
+            continuity-results/candidate/continuity/font-2.0/instrumentation.log
+            continuity-results/candidate/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/temperature-2x-*/**
+          if-no-files-found: error
+      - name: Save baseline Dew point normal-text native video
+        if: always() && matrix.shard == 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-normal-shard-${{ matrix.shard }}-dew-point
+          compression-level: 0
+          path: |
+            continuity-results/baseline/continuity/font-1.0/continuity-dew-point.mp4
+            continuity-results/baseline/continuity/font-1.0/continuity-dew-point.capture.json
+            continuity-results/baseline/continuity/font-1.0/continuity-dew-point-before.png
+            continuity-results/baseline/continuity/font-1.0/continuity-dew-point-after.png
+            continuity-results/baseline/continuity/font-1.0/continuity-dew-point-failure.png
+            continuity-results/baseline/continuity/font-1.0/continuity-dew-point-failure.xml
+            continuity-results/baseline/continuity/font-1.0/continuity-dew-point-screenrecord.log
+            continuity-results/baseline/continuity/font-1.0/continuity-dew-point-launch.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-dew-point-probe.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-dew-point-stop.sh
+            continuity-results/baseline/continuity/font-1.0/instrumentation.log
+            continuity-results/baseline/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/dew-point-1x-*/**
+          if-no-files-found: error
+      - name: Save baseline Dew point large-text native video
+        if: always() && matrix.shard == 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-large-shard-${{ matrix.shard }}-dew-point
+          compression-level: 0
+          path: |
+            continuity-results/baseline/continuity/font-2.0/continuity-dew-point.mp4
+            continuity-results/baseline/continuity/font-2.0/continuity-dew-point.capture.json
+            continuity-results/baseline/continuity/font-2.0/continuity-dew-point-before.png
+            continuity-results/baseline/continuity/font-2.0/continuity-dew-point-after.png
+            continuity-results/baseline/continuity/font-2.0/continuity-dew-point-failure.png
+            continuity-results/baseline/continuity/font-2.0/continuity-dew-point-failure.xml
+            continuity-results/baseline/continuity/font-2.0/continuity-dew-point-screenrecord.log
+            continuity-results/baseline/continuity/font-2.0/continuity-dew-point-launch.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-dew-point-probe.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-dew-point-stop.sh
+            continuity-results/baseline/continuity/font-2.0/instrumentation.log
+            continuity-results/baseline/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/dew-point-2x-*/**
+          if-no-files-found: error
+      - name: Save candidate Dew point normal-text native video
+        if: always() && matrix.shard == 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-normal-shard-${{ matrix.shard }}-dew-point
+          compression-level: 0
+          path: |
+            continuity-results/candidate/continuity/font-1.0/continuity-dew-point.mp4
+            continuity-results/candidate/continuity/font-1.0/continuity-dew-point.capture.json
+            continuity-results/candidate/continuity/font-1.0/continuity-dew-point-before.png
+            continuity-results/candidate/continuity/font-1.0/continuity-dew-point-after.png
+            continuity-results/candidate/continuity/font-1.0/continuity-dew-point-failure.png
+            continuity-results/candidate/continuity/font-1.0/continuity-dew-point-failure.xml
+            continuity-results/candidate/continuity/font-1.0/continuity-dew-point-screenrecord.log
+            continuity-results/candidate/continuity/font-1.0/continuity-dew-point-launch.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-dew-point-probe.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-dew-point-stop.sh
+            continuity-results/candidate/continuity/font-1.0/instrumentation.log
+            continuity-results/candidate/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/dew-point-1x-*/**
+          if-no-files-found: error
+      - name: Save candidate Dew point large-text native video
+        if: always() && matrix.shard == 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-large-shard-${{ matrix.shard }}-dew-point
+          compression-level: 0
+          path: |
+            continuity-results/candidate/continuity/font-2.0/continuity-dew-point.mp4
+            continuity-results/candidate/continuity/font-2.0/continuity-dew-point.capture.json
+            continuity-results/candidate/continuity/font-2.0/continuity-dew-point-before.png
+            continuity-results/candidate/continuity/font-2.0/continuity-dew-point-after.png
+            continuity-results/candidate/continuity/font-2.0/continuity-dew-point-failure.png
+            continuity-results/candidate/continuity/font-2.0/continuity-dew-point-failure.xml
+            continuity-results/candidate/continuity/font-2.0/continuity-dew-point-screenrecord.log
+            continuity-results/candidate/continuity/font-2.0/continuity-dew-point-launch.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-dew-point-probe.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-dew-point-stop.sh
+            continuity-results/candidate/continuity/font-2.0/instrumentation.log
+            continuity-results/candidate/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/dew-point-2x-*/**
+          if-no-files-found: error
+      - name: Save baseline Wind normal-text native video
+        if: always() && matrix.shard == 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-normal-shard-${{ matrix.shard }}-wind
+          compression-level: 0
+          path: |
+            continuity-results/baseline/continuity/font-1.0/continuity-wind.mp4
+            continuity-results/baseline/continuity/font-1.0/continuity-wind.capture.json
+            continuity-results/baseline/continuity/font-1.0/continuity-wind-before.png
+            continuity-results/baseline/continuity/font-1.0/continuity-wind-after.png
+            continuity-results/baseline/continuity/font-1.0/continuity-wind-failure.png
+            continuity-results/baseline/continuity/font-1.0/continuity-wind-failure.xml
+            continuity-results/baseline/continuity/font-1.0/continuity-wind-screenrecord.log
+            continuity-results/baseline/continuity/font-1.0/continuity-wind-launch.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-wind-probe.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-wind-stop.sh
+            continuity-results/baseline/continuity/font-1.0/instrumentation.log
+            continuity-results/baseline/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/wind-1x-*/**
+          if-no-files-found: error
+      - name: Save baseline Wind large-text native video
+        if: always() && matrix.shard == 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-large-shard-${{ matrix.shard }}-wind
+          compression-level: 0
+          path: |
+            continuity-results/baseline/continuity/font-2.0/continuity-wind.mp4
+            continuity-results/baseline/continuity/font-2.0/continuity-wind.capture.json
+            continuity-results/baseline/continuity/font-2.0/continuity-wind-before.png
+            continuity-results/baseline/continuity/font-2.0/continuity-wind-after.png
+            continuity-results/baseline/continuity/font-2.0/continuity-wind-failure.png
+            continuity-results/baseline/continuity/font-2.0/continuity-wind-failure.xml
+            continuity-results/baseline/continuity/font-2.0/continuity-wind-screenrecord.log
+            continuity-results/baseline/continuity/font-2.0/continuity-wind-launch.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-wind-probe.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-wind-stop.sh
+            continuity-results/baseline/continuity/font-2.0/instrumentation.log
+            continuity-results/baseline/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/wind-2x-*/**
+          if-no-files-found: error
+      - name: Save candidate Wind normal-text native video
+        if: always() && matrix.shard == 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-normal-shard-${{ matrix.shard }}-wind
+          compression-level: 0
+          path: |
+            continuity-results/candidate/continuity/font-1.0/continuity-wind.mp4
+            continuity-results/candidate/continuity/font-1.0/continuity-wind.capture.json
+            continuity-results/candidate/continuity/font-1.0/continuity-wind-before.png
+            continuity-results/candidate/continuity/font-1.0/continuity-wind-after.png
+            continuity-results/candidate/continuity/font-1.0/continuity-wind-failure.png
+            continuity-results/candidate/continuity/font-1.0/continuity-wind-failure.xml
+            continuity-results/candidate/continuity/font-1.0/continuity-wind-screenrecord.log
+            continuity-results/candidate/continuity/font-1.0/continuity-wind-launch.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-wind-probe.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-wind-stop.sh
+            continuity-results/candidate/continuity/font-1.0/instrumentation.log
+            continuity-results/candidate/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/wind-1x-*/**
+          if-no-files-found: error
+      - name: Save candidate Wind large-text native video
+        if: always() && matrix.shard == 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-large-shard-${{ matrix.shard }}-wind
+          compression-level: 0
+          path: |
+            continuity-results/candidate/continuity/font-2.0/continuity-wind.mp4
+            continuity-results/candidate/continuity/font-2.0/continuity-wind.capture.json
+            continuity-results/candidate/continuity/font-2.0/continuity-wind-before.png
+            continuity-results/candidate/continuity/font-2.0/continuity-wind-after.png
+            continuity-results/candidate/continuity/font-2.0/continuity-wind-failure.png
+            continuity-results/candidate/continuity/font-2.0/continuity-wind-failure.xml
+            continuity-results/candidate/continuity/font-2.0/continuity-wind-screenrecord.log
+            continuity-results/candidate/continuity/font-2.0/continuity-wind-launch.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-wind-probe.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-wind-stop.sh
+            continuity-results/candidate/continuity/font-2.0/instrumentation.log
+            continuity-results/candidate/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/wind-2x-*/**
+          if-no-files-found: error
+      - name: Save baseline Wind gusts normal-text native video
+        if: always() && matrix.shard == 3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-normal-shard-${{ matrix.shard }}-wind-gusts
+          compression-level: 0
+          path: |
+            continuity-results/baseline/continuity/font-1.0/continuity-wind-gusts.mp4
+            continuity-results/baseline/continuity/font-1.0/continuity-wind-gusts.capture.json
+            continuity-results/baseline/continuity/font-1.0/continuity-wind-gusts-before.png
+            continuity-results/baseline/continuity/font-1.0/continuity-wind-gusts-after.png
+            continuity-results/baseline/continuity/font-1.0/continuity-wind-gusts-failure.png
+            continuity-results/baseline/continuity/font-1.0/continuity-wind-gusts-failure.xml
+            continuity-results/baseline/continuity/font-1.0/continuity-wind-gusts-screenrecord.log
+            continuity-results/baseline/continuity/font-1.0/continuity-wind-gusts-launch.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-wind-gusts-probe.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-wind-gusts-stop.sh
+            continuity-results/baseline/continuity/font-1.0/instrumentation.log
+            continuity-results/baseline/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/wind-gusts-1x-*/**
+          if-no-files-found: error
+      - name: Save baseline Wind gusts large-text native video
+        if: always() && matrix.shard == 3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-large-shard-${{ matrix.shard }}-wind-gusts
+          compression-level: 0
+          path: |
+            continuity-results/baseline/continuity/font-2.0/continuity-wind-gusts.mp4
+            continuity-results/baseline/continuity/font-2.0/continuity-wind-gusts.capture.json
+            continuity-results/baseline/continuity/font-2.0/continuity-wind-gusts-before.png
+            continuity-results/baseline/continuity/font-2.0/continuity-wind-gusts-after.png
+            continuity-results/baseline/continuity/font-2.0/continuity-wind-gusts-failure.png
+            continuity-results/baseline/continuity/font-2.0/continuity-wind-gusts-failure.xml
+            continuity-results/baseline/continuity/font-2.0/continuity-wind-gusts-screenrecord.log
+            continuity-results/baseline/continuity/font-2.0/continuity-wind-gusts-launch.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-wind-gusts-probe.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-wind-gusts-stop.sh
+            continuity-results/baseline/continuity/font-2.0/instrumentation.log
+            continuity-results/baseline/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/wind-gusts-2x-*/**
+          if-no-files-found: error
+      - name: Save candidate Wind gusts normal-text native video
+        if: always() && matrix.shard == 3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-normal-shard-${{ matrix.shard }}-wind-gusts
+          compression-level: 0
+          path: |
+            continuity-results/candidate/continuity/font-1.0/continuity-wind-gusts.mp4
+            continuity-results/candidate/continuity/font-1.0/continuity-wind-gusts.capture.json
+            continuity-results/candidate/continuity/font-1.0/continuity-wind-gusts-before.png
+            continuity-results/candidate/continuity/font-1.0/continuity-wind-gusts-after.png
+            continuity-results/candidate/continuity/font-1.0/continuity-wind-gusts-failure.png
+            continuity-results/candidate/continuity/font-1.0/continuity-wind-gusts-failure.xml
+            continuity-results/candidate/continuity/font-1.0/continuity-wind-gusts-screenrecord.log
+            continuity-results/candidate/continuity/font-1.0/continuity-wind-gusts-launch.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-wind-gusts-probe.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-wind-gusts-stop.sh
+            continuity-results/candidate/continuity/font-1.0/instrumentation.log
+            continuity-results/candidate/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/wind-gusts-1x-*/**
+          if-no-files-found: error
+      - name: Save candidate Wind gusts large-text native video
+        if: always() && matrix.shard == 3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-large-shard-${{ matrix.shard }}-wind-gusts
+          compression-level: 0
+          path: |
+            continuity-results/candidate/continuity/font-2.0/continuity-wind-gusts.mp4
+            continuity-results/candidate/continuity/font-2.0/continuity-wind-gusts.capture.json
+            continuity-results/candidate/continuity/font-2.0/continuity-wind-gusts-before.png
+            continuity-results/candidate/continuity/font-2.0/continuity-wind-gusts-after.png
+            continuity-results/candidate/continuity/font-2.0/continuity-wind-gusts-failure.png
+            continuity-results/candidate/continuity/font-2.0/continuity-wind-gusts-failure.xml
+            continuity-results/candidate/continuity/font-2.0/continuity-wind-gusts-screenrecord.log
+            continuity-results/candidate/continuity/font-2.0/continuity-wind-gusts-launch.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-wind-gusts-probe.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-wind-gusts-stop.sh
+            continuity-results/candidate/continuity/font-2.0/instrumentation.log
+            continuity-results/candidate/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/wind-gusts-2x-*/**
+          if-no-files-found: error
+      - name: Save baseline Clouds normal-text native video
+        if: always() && matrix.shard == 4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-normal-shard-${{ matrix.shard }}-clouds
+          compression-level: 0
+          path: |
+            continuity-results/baseline/continuity/font-1.0/continuity-clouds.mp4
+            continuity-results/baseline/continuity/font-1.0/continuity-clouds.capture.json
+            continuity-results/baseline/continuity/font-1.0/continuity-clouds-before.png
+            continuity-results/baseline/continuity/font-1.0/continuity-clouds-after.png
+            continuity-results/baseline/continuity/font-1.0/continuity-clouds-failure.png
+            continuity-results/baseline/continuity/font-1.0/continuity-clouds-failure.xml
+            continuity-results/baseline/continuity/font-1.0/continuity-clouds-screenrecord.log
+            continuity-results/baseline/continuity/font-1.0/continuity-clouds-launch.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-clouds-probe.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-clouds-stop.sh
+            continuity-results/baseline/continuity/font-1.0/instrumentation.log
+            continuity-results/baseline/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/clouds-1x-*/**
+          if-no-files-found: error
+      - name: Save baseline Clouds large-text native video
+        if: always() && matrix.shard == 4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-large-shard-${{ matrix.shard }}-clouds
+          compression-level: 0
+          path: |
+            continuity-results/baseline/continuity/font-2.0/continuity-clouds.mp4
+            continuity-results/baseline/continuity/font-2.0/continuity-clouds.capture.json
+            continuity-results/baseline/continuity/font-2.0/continuity-clouds-before.png
+            continuity-results/baseline/continuity/font-2.0/continuity-clouds-after.png
+            continuity-results/baseline/continuity/font-2.0/continuity-clouds-failure.png
+            continuity-results/baseline/continuity/font-2.0/continuity-clouds-failure.xml
+            continuity-results/baseline/continuity/font-2.0/continuity-clouds-screenrecord.log
+            continuity-results/baseline/continuity/font-2.0/continuity-clouds-launch.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-clouds-probe.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-clouds-stop.sh
+            continuity-results/baseline/continuity/font-2.0/instrumentation.log
+            continuity-results/baseline/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/clouds-2x-*/**
+          if-no-files-found: error
+      - name: Save candidate Clouds normal-text native video
+        if: always() && matrix.shard == 4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-normal-shard-${{ matrix.shard }}-clouds
+          compression-level: 0
+          path: |
+            continuity-results/candidate/continuity/font-1.0/continuity-clouds.mp4
+            continuity-results/candidate/continuity/font-1.0/continuity-clouds.capture.json
+            continuity-results/candidate/continuity/font-1.0/continuity-clouds-before.png
+            continuity-results/candidate/continuity/font-1.0/continuity-clouds-after.png
+            continuity-results/candidate/continuity/font-1.0/continuity-clouds-failure.png
+            continuity-results/candidate/continuity/font-1.0/continuity-clouds-failure.xml
+            continuity-results/candidate/continuity/font-1.0/continuity-clouds-screenrecord.log
+            continuity-results/candidate/continuity/font-1.0/continuity-clouds-launch.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-clouds-probe.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-clouds-stop.sh
+            continuity-results/candidate/continuity/font-1.0/instrumentation.log
+            continuity-results/candidate/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/clouds-1x-*/**
+          if-no-files-found: error
+      - name: Save candidate Clouds large-text native video
+        if: always() && matrix.shard == 4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-large-shard-${{ matrix.shard }}-clouds
+          compression-level: 0
+          path: |
+            continuity-results/candidate/continuity/font-2.0/continuity-clouds.mp4
+            continuity-results/candidate/continuity/font-2.0/continuity-clouds.capture.json
+            continuity-results/candidate/continuity/font-2.0/continuity-clouds-before.png
+            continuity-results/candidate/continuity/font-2.0/continuity-clouds-after.png
+            continuity-results/candidate/continuity/font-2.0/continuity-clouds-failure.png
+            continuity-results/candidate/continuity/font-2.0/continuity-clouds-failure.xml
+            continuity-results/candidate/continuity/font-2.0/continuity-clouds-screenrecord.log
+            continuity-results/candidate/continuity/font-2.0/continuity-clouds-launch.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-clouds-probe.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-clouds-stop.sh
+            continuity-results/candidate/continuity/font-2.0/instrumentation.log
+            continuity-results/candidate/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/clouds-2x-*/**
+          if-no-files-found: error
+      - name: Save baseline Precip total normal-text native video
+        if: always() && matrix.shard == 0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-normal-shard-${{ matrix.shard }}-precip-total
+          compression-level: 0
+          path: |
+            continuity-results/baseline/continuity/font-1.0/continuity-precip-total.mp4
+            continuity-results/baseline/continuity/font-1.0/continuity-precip-total.capture.json
+            continuity-results/baseline/continuity/font-1.0/continuity-precip-total-before.png
+            continuity-results/baseline/continuity/font-1.0/continuity-precip-total-after.png
+            continuity-results/baseline/continuity/font-1.0/continuity-precip-total-failure.png
+            continuity-results/baseline/continuity/font-1.0/continuity-precip-total-failure.xml
+            continuity-results/baseline/continuity/font-1.0/continuity-precip-total-screenrecord.log
+            continuity-results/baseline/continuity/font-1.0/continuity-precip-total-launch.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-precip-total-probe.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-precip-total-stop.sh
+            continuity-results/baseline/continuity/font-1.0/instrumentation.log
+            continuity-results/baseline/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/precip-total-1x-*/**
+          if-no-files-found: error
+      - name: Save baseline Precip total large-text native video
+        if: always() && matrix.shard == 0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-large-shard-${{ matrix.shard }}-precip-total
+          compression-level: 0
+          path: |
+            continuity-results/baseline/continuity/font-2.0/continuity-precip-total.mp4
+            continuity-results/baseline/continuity/font-2.0/continuity-precip-total.capture.json
+            continuity-results/baseline/continuity/font-2.0/continuity-precip-total-before.png
+            continuity-results/baseline/continuity/font-2.0/continuity-precip-total-after.png
+            continuity-results/baseline/continuity/font-2.0/continuity-precip-total-failure.png
+            continuity-results/baseline/continuity/font-2.0/continuity-precip-total-failure.xml
+            continuity-results/baseline/continuity/font-2.0/continuity-precip-total-screenrecord.log
+            continuity-results/baseline/continuity/font-2.0/continuity-precip-total-launch.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-precip-total-probe.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-precip-total-stop.sh
+            continuity-results/baseline/continuity/font-2.0/instrumentation.log
+            continuity-results/baseline/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/precip-total-2x-*/**
+          if-no-files-found: error
+      - name: Save candidate Precip total normal-text native video
+        if: always() && matrix.shard == 0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-normal-shard-${{ matrix.shard }}-precip-total
+          compression-level: 0
+          path: |
+            continuity-results/candidate/continuity/font-1.0/continuity-precip-total.mp4
+            continuity-results/candidate/continuity/font-1.0/continuity-precip-total.capture.json
+            continuity-results/candidate/continuity/font-1.0/continuity-precip-total-before.png
+            continuity-results/candidate/continuity/font-1.0/continuity-precip-total-after.png
+            continuity-results/candidate/continuity/font-1.0/continuity-precip-total-failure.png
+            continuity-results/candidate/continuity/font-1.0/continuity-precip-total-failure.xml
+            continuity-results/candidate/continuity/font-1.0/continuity-precip-total-screenrecord.log
+            continuity-results/candidate/continuity/font-1.0/continuity-precip-total-launch.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-precip-total-probe.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-precip-total-stop.sh
+            continuity-results/candidate/continuity/font-1.0/instrumentation.log
+            continuity-results/candidate/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/precip-total-1x-*/**
+          if-no-files-found: error
+      - name: Save candidate Precip total large-text native video
+        if: always() && matrix.shard == 0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-large-shard-${{ matrix.shard }}-precip-total
+          compression-level: 0
+          path: |
+            continuity-results/candidate/continuity/font-2.0/continuity-precip-total.mp4
+            continuity-results/candidate/continuity/font-2.0/continuity-precip-total.capture.json
+            continuity-results/candidate/continuity/font-2.0/continuity-precip-total-before.png
+            continuity-results/candidate/continuity/font-2.0/continuity-precip-total-after.png
+            continuity-results/candidate/continuity/font-2.0/continuity-precip-total-failure.png
+            continuity-results/candidate/continuity/font-2.0/continuity-precip-total-failure.xml
+            continuity-results/candidate/continuity/font-2.0/continuity-precip-total-screenrecord.log
+            continuity-results/candidate/continuity/font-2.0/continuity-precip-total-launch.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-precip-total-probe.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-precip-total-stop.sh
+            continuity-results/candidate/continuity/font-2.0/instrumentation.log
+            continuity-results/candidate/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/precip-total-2x-*/**
+          if-no-files-found: error
+      - name: Save baseline Snow total normal-text native video
+        if: always() && matrix.shard == 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-normal-shard-${{ matrix.shard }}-snow-total
+          compression-level: 0
+          path: |
+            continuity-results/baseline/continuity/font-1.0/continuity-snow-total.mp4
+            continuity-results/baseline/continuity/font-1.0/continuity-snow-total.capture.json
+            continuity-results/baseline/continuity/font-1.0/continuity-snow-total-before.png
+            continuity-results/baseline/continuity/font-1.0/continuity-snow-total-after.png
+            continuity-results/baseline/continuity/font-1.0/continuity-snow-total-failure.png
+            continuity-results/baseline/continuity/font-1.0/continuity-snow-total-failure.xml
+            continuity-results/baseline/continuity/font-1.0/continuity-snow-total-screenrecord.log
+            continuity-results/baseline/continuity/font-1.0/continuity-snow-total-launch.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-snow-total-probe.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-snow-total-stop.sh
+            continuity-results/baseline/continuity/font-1.0/instrumentation.log
+            continuity-results/baseline/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/snow-total-1x-*/**
+          if-no-files-found: error
+      - name: Save baseline Snow total large-text native video
+        if: always() && matrix.shard == 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-large-shard-${{ matrix.shard }}-snow-total
+          compression-level: 0
+          path: |
+            continuity-results/baseline/continuity/font-2.0/continuity-snow-total.mp4
+            continuity-results/baseline/continuity/font-2.0/continuity-snow-total.capture.json
+            continuity-results/baseline/continuity/font-2.0/continuity-snow-total-before.png
+            continuity-results/baseline/continuity/font-2.0/continuity-snow-total-after.png
+            continuity-results/baseline/continuity/font-2.0/continuity-snow-total-failure.png
+            continuity-results/baseline/continuity/font-2.0/continuity-snow-total-failure.xml
+            continuity-results/baseline/continuity/font-2.0/continuity-snow-total-screenrecord.log
+            continuity-results/baseline/continuity/font-2.0/continuity-snow-total-launch.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-snow-total-probe.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-snow-total-stop.sh
+            continuity-results/baseline/continuity/font-2.0/instrumentation.log
+            continuity-results/baseline/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/snow-total-2x-*/**
+          if-no-files-found: error
+      - name: Save candidate Snow total normal-text native video
+        if: always() && matrix.shard == 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-normal-shard-${{ matrix.shard }}-snow-total
+          compression-level: 0
+          path: |
+            continuity-results/candidate/continuity/font-1.0/continuity-snow-total.mp4
+            continuity-results/candidate/continuity/font-1.0/continuity-snow-total.capture.json
+            continuity-results/candidate/continuity/font-1.0/continuity-snow-total-before.png
+            continuity-results/candidate/continuity/font-1.0/continuity-snow-total-after.png
+            continuity-results/candidate/continuity/font-1.0/continuity-snow-total-failure.png
+            continuity-results/candidate/continuity/font-1.0/continuity-snow-total-failure.xml
+            continuity-results/candidate/continuity/font-1.0/continuity-snow-total-screenrecord.log
+            continuity-results/candidate/continuity/font-1.0/continuity-snow-total-launch.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-snow-total-probe.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-snow-total-stop.sh
+            continuity-results/candidate/continuity/font-1.0/instrumentation.log
+            continuity-results/candidate/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/snow-total-1x-*/**
+          if-no-files-found: error
+      - name: Save candidate Snow total large-text native video
+        if: always() && matrix.shard == 1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-large-shard-${{ matrix.shard }}-snow-total
+          compression-level: 0
+          path: |
+            continuity-results/candidate/continuity/font-2.0/continuity-snow-total.mp4
+            continuity-results/candidate/continuity/font-2.0/continuity-snow-total.capture.json
+            continuity-results/candidate/continuity/font-2.0/continuity-snow-total-before.png
+            continuity-results/candidate/continuity/font-2.0/continuity-snow-total-after.png
+            continuity-results/candidate/continuity/font-2.0/continuity-snow-total-failure.png
+            continuity-results/candidate/continuity/font-2.0/continuity-snow-total-failure.xml
+            continuity-results/candidate/continuity/font-2.0/continuity-snow-total-screenrecord.log
+            continuity-results/candidate/continuity/font-2.0/continuity-snow-total-launch.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-snow-total-probe.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-snow-total-stop.sh
+            continuity-results/candidate/continuity/font-2.0/instrumentation.log
+            continuity-results/candidate/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/snow-total-2x-*/**
+          if-no-files-found: error
+      - name: Save baseline Radar normal-text native video
+        if: always() && matrix.shard == 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-normal-shard-${{ matrix.shard }}-radar
+          compression-level: 0
+          path: |
+            continuity-results/baseline/continuity/font-1.0/continuity-radar.mp4
+            continuity-results/baseline/continuity/font-1.0/continuity-radar.capture.json
+            continuity-results/baseline/continuity/font-1.0/continuity-radar-before.png
+            continuity-results/baseline/continuity/font-1.0/continuity-radar-after.png
+            continuity-results/baseline/continuity/font-1.0/continuity-radar-failure.png
+            continuity-results/baseline/continuity/font-1.0/continuity-radar-failure.xml
+            continuity-results/baseline/continuity/font-1.0/continuity-radar-screenrecord.log
+            continuity-results/baseline/continuity/font-1.0/continuity-radar-launch.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-radar-probe.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-radar-stop.sh
+            continuity-results/baseline/continuity/font-1.0/instrumentation.log
+            continuity-results/baseline/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/radar-1x-*/**
+          if-no-files-found: error
+      - name: Save baseline Radar large-text native video
+        if: always() && matrix.shard == 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-large-shard-${{ matrix.shard }}-radar
+          compression-level: 0
+          path: |
+            continuity-results/baseline/continuity/font-2.0/continuity-radar.mp4
+            continuity-results/baseline/continuity/font-2.0/continuity-radar.capture.json
+            continuity-results/baseline/continuity/font-2.0/continuity-radar-before.png
+            continuity-results/baseline/continuity/font-2.0/continuity-radar-after.png
+            continuity-results/baseline/continuity/font-2.0/continuity-radar-failure.png
+            continuity-results/baseline/continuity/font-2.0/continuity-radar-failure.xml
+            continuity-results/baseline/continuity/font-2.0/continuity-radar-screenrecord.log
+            continuity-results/baseline/continuity/font-2.0/continuity-radar-launch.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-radar-probe.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-radar-stop.sh
+            continuity-results/baseline/continuity/font-2.0/instrumentation.log
+            continuity-results/baseline/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/radar-2x-*/**
+          if-no-files-found: error
+      - name: Save candidate Radar normal-text native video
+        if: always() && matrix.shard == 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-normal-shard-${{ matrix.shard }}-radar
+          compression-level: 0
+          path: |
+            continuity-results/candidate/continuity/font-1.0/continuity-radar.mp4
+            continuity-results/candidate/continuity/font-1.0/continuity-radar.capture.json
+            continuity-results/candidate/continuity/font-1.0/continuity-radar-before.png
+            continuity-results/candidate/continuity/font-1.0/continuity-radar-after.png
+            continuity-results/candidate/continuity/font-1.0/continuity-radar-failure.png
+            continuity-results/candidate/continuity/font-1.0/continuity-radar-failure.xml
+            continuity-results/candidate/continuity/font-1.0/continuity-radar-screenrecord.log
+            continuity-results/candidate/continuity/font-1.0/continuity-radar-launch.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-radar-probe.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-radar-stop.sh
+            continuity-results/candidate/continuity/font-1.0/instrumentation.log
+            continuity-results/candidate/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/radar-1x-*/**
+          if-no-files-found: error
+      - name: Save candidate Radar large-text native video
+        if: always() && matrix.shard == 2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-large-shard-${{ matrix.shard }}-radar
+          compression-level: 0
+          path: |
+            continuity-results/candidate/continuity/font-2.0/continuity-radar.mp4
+            continuity-results/candidate/continuity/font-2.0/continuity-radar.capture.json
+            continuity-results/candidate/continuity/font-2.0/continuity-radar-before.png
+            continuity-results/candidate/continuity/font-2.0/continuity-radar-after.png
+            continuity-results/candidate/continuity/font-2.0/continuity-radar-failure.png
+            continuity-results/candidate/continuity/font-2.0/continuity-radar-failure.xml
+            continuity-results/candidate/continuity/font-2.0/continuity-radar-screenrecord.log
+            continuity-results/candidate/continuity/font-2.0/continuity-radar-launch.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-radar-probe.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-radar-stop.sh
+            continuity-results/candidate/continuity/font-2.0/instrumentation.log
+            continuity-results/candidate/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/radar-2x-*/**
+          if-no-files-found: error
+      - name: Save baseline Satellite normal-text native video
+        if: always() && matrix.shard == 3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-normal-shard-${{ matrix.shard }}-satellite
+          compression-level: 0
+          path: |
+            continuity-results/baseline/continuity/font-1.0/continuity-satellite.mp4
+            continuity-results/baseline/continuity/font-1.0/continuity-satellite.capture.json
+            continuity-results/baseline/continuity/font-1.0/continuity-satellite-before.png
+            continuity-results/baseline/continuity/font-1.0/continuity-satellite-after.png
+            continuity-results/baseline/continuity/font-1.0/continuity-satellite-failure.png
+            continuity-results/baseline/continuity/font-1.0/continuity-satellite-failure.xml
+            continuity-results/baseline/continuity/font-1.0/continuity-satellite-screenrecord.log
+            continuity-results/baseline/continuity/font-1.0/continuity-satellite-launch.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-satellite-probe.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-satellite-stop.sh
+            continuity-results/baseline/continuity/font-1.0/instrumentation.log
+            continuity-results/baseline/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/satellite-1x-*/**
+          if-no-files-found: error
+      - name: Save baseline Satellite large-text native video
+        if: always() && matrix.shard == 3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-large-shard-${{ matrix.shard }}-satellite
+          compression-level: 0
+          path: |
+            continuity-results/baseline/continuity/font-2.0/continuity-satellite.mp4
+            continuity-results/baseline/continuity/font-2.0/continuity-satellite.capture.json
+            continuity-results/baseline/continuity/font-2.0/continuity-satellite-before.png
+            continuity-results/baseline/continuity/font-2.0/continuity-satellite-after.png
+            continuity-results/baseline/continuity/font-2.0/continuity-satellite-failure.png
+            continuity-results/baseline/continuity/font-2.0/continuity-satellite-failure.xml
+            continuity-results/baseline/continuity/font-2.0/continuity-satellite-screenrecord.log
+            continuity-results/baseline/continuity/font-2.0/continuity-satellite-launch.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-satellite-probe.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-satellite-stop.sh
+            continuity-results/baseline/continuity/font-2.0/instrumentation.log
+            continuity-results/baseline/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/satellite-2x-*/**
+          if-no-files-found: error
+      - name: Save candidate Satellite normal-text native video
+        if: always() && matrix.shard == 3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-normal-shard-${{ matrix.shard }}-satellite
+          compression-level: 0
+          path: |
+            continuity-results/candidate/continuity/font-1.0/continuity-satellite.mp4
+            continuity-results/candidate/continuity/font-1.0/continuity-satellite.capture.json
+            continuity-results/candidate/continuity/font-1.0/continuity-satellite-before.png
+            continuity-results/candidate/continuity/font-1.0/continuity-satellite-after.png
+            continuity-results/candidate/continuity/font-1.0/continuity-satellite-failure.png
+            continuity-results/candidate/continuity/font-1.0/continuity-satellite-failure.xml
+            continuity-results/candidate/continuity/font-1.0/continuity-satellite-screenrecord.log
+            continuity-results/candidate/continuity/font-1.0/continuity-satellite-launch.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-satellite-probe.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-satellite-stop.sh
+            continuity-results/candidate/continuity/font-1.0/instrumentation.log
+            continuity-results/candidate/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/satellite-1x-*/**
+          if-no-files-found: error
+      - name: Save candidate Satellite large-text native video
+        if: always() && matrix.shard == 3
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-large-shard-${{ matrix.shard }}-satellite
+          compression-level: 0
+          path: |
+            continuity-results/candidate/continuity/font-2.0/continuity-satellite.mp4
+            continuity-results/candidate/continuity/font-2.0/continuity-satellite.capture.json
+            continuity-results/candidate/continuity/font-2.0/continuity-satellite-before.png
+            continuity-results/candidate/continuity/font-2.0/continuity-satellite-after.png
+            continuity-results/candidate/continuity/font-2.0/continuity-satellite-failure.png
+            continuity-results/candidate/continuity/font-2.0/continuity-satellite-failure.xml
+            continuity-results/candidate/continuity/font-2.0/continuity-satellite-screenrecord.log
+            continuity-results/candidate/continuity/font-2.0/continuity-satellite-launch.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-satellite-probe.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-satellite-stop.sh
+            continuity-results/candidate/continuity/font-2.0/instrumentation.log
+            continuity-results/candidate/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/satellite-2x-*/**
+          if-no-files-found: error
+      - name: Save baseline Radar + satellite normal-text native video
+        if: always() && matrix.shard == 4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-normal-shard-${{ matrix.shard }}-radar-satellite
+          compression-level: 0
+          path: |
+            continuity-results/baseline/continuity/font-1.0/continuity-radar-satellite.mp4
+            continuity-results/baseline/continuity/font-1.0/continuity-radar-satellite.capture.json
+            continuity-results/baseline/continuity/font-1.0/continuity-radar-satellite-before.png
+            continuity-results/baseline/continuity/font-1.0/continuity-radar-satellite-after.png
+            continuity-results/baseline/continuity/font-1.0/continuity-radar-satellite-failure.png
+            continuity-results/baseline/continuity/font-1.0/continuity-radar-satellite-failure.xml
+            continuity-results/baseline/continuity/font-1.0/continuity-radar-satellite-screenrecord.log
+            continuity-results/baseline/continuity/font-1.0/continuity-radar-satellite-launch.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-radar-satellite-probe.sh
+            continuity-results/baseline/continuity/font-1.0/continuity-radar-satellite-stop.sh
+            continuity-results/baseline/continuity/font-1.0/instrumentation.log
+            continuity-results/baseline/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/radar-satellite-1x-*/**
+          if-no-files-found: error
+      - name: Save baseline Radar + satellite large-text native video
+        if: always() && matrix.shard == 4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-large-shard-${{ matrix.shard }}-radar-satellite
+          compression-level: 0
+          path: |
+            continuity-results/baseline/continuity/font-2.0/continuity-radar-satellite.mp4
+            continuity-results/baseline/continuity/font-2.0/continuity-radar-satellite.capture.json
+            continuity-results/baseline/continuity/font-2.0/continuity-radar-satellite-before.png
+            continuity-results/baseline/continuity/font-2.0/continuity-radar-satellite-after.png
+            continuity-results/baseline/continuity/font-2.0/continuity-radar-satellite-failure.png
+            continuity-results/baseline/continuity/font-2.0/continuity-radar-satellite-failure.xml
+            continuity-results/baseline/continuity/font-2.0/continuity-radar-satellite-screenrecord.log
+            continuity-results/baseline/continuity/font-2.0/continuity-radar-satellite-launch.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-radar-satellite-probe.sh
+            continuity-results/baseline/continuity/font-2.0/continuity-radar-satellite-stop.sh
+            continuity-results/baseline/continuity/font-2.0/instrumentation.log
+            continuity-results/baseline/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/baseline/continuity/continuity-analysis.json
+            continuity-results/baseline/continuity/continuity-status.txt
+            continuity-results/baseline/continuity/continuity-analysis-frames/radar-satellite-2x-*/**
+          if-no-files-found: error
+      - name: Save candidate Radar + satellite normal-text native video
+        if: always() && matrix.shard == 4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-normal-shard-${{ matrix.shard }}-radar-satellite
+          compression-level: 0
+          path: |
+            continuity-results/candidate/continuity/font-1.0/continuity-radar-satellite.mp4
+            continuity-results/candidate/continuity/font-1.0/continuity-radar-satellite.capture.json
+            continuity-results/candidate/continuity/font-1.0/continuity-radar-satellite-before.png
+            continuity-results/candidate/continuity/font-1.0/continuity-radar-satellite-after.png
+            continuity-results/candidate/continuity/font-1.0/continuity-radar-satellite-failure.png
+            continuity-results/candidate/continuity/font-1.0/continuity-radar-satellite-failure.xml
+            continuity-results/candidate/continuity/font-1.0/continuity-radar-satellite-screenrecord.log
+            continuity-results/candidate/continuity/font-1.0/continuity-radar-satellite-launch.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-radar-satellite-probe.sh
+            continuity-results/candidate/continuity/font-1.0/continuity-radar-satellite-stop.sh
+            continuity-results/candidate/continuity/font-1.0/instrumentation.log
+            continuity-results/candidate/continuity/font-1.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/radar-satellite-1x-*/**
+          if-no-files-found: error
+      - name: Save candidate Radar + satellite large-text native video
+        if: always() && matrix.shard == 4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-large-shard-${{ matrix.shard }}-radar-satellite
+          compression-level: 0
+          path: |
+            continuity-results/candidate/continuity/font-2.0/continuity-radar-satellite.mp4
+            continuity-results/candidate/continuity/font-2.0/continuity-radar-satellite.capture.json
+            continuity-results/candidate/continuity/font-2.0/continuity-radar-satellite-before.png
+            continuity-results/candidate/continuity/font-2.0/continuity-radar-satellite-after.png
+            continuity-results/candidate/continuity/font-2.0/continuity-radar-satellite-failure.png
+            continuity-results/candidate/continuity/font-2.0/continuity-radar-satellite-failure.xml
+            continuity-results/candidate/continuity/font-2.0/continuity-radar-satellite-screenrecord.log
+            continuity-results/candidate/continuity/font-2.0/continuity-radar-satellite-launch.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-radar-satellite-probe.sh
+            continuity-results/candidate/continuity/font-2.0/continuity-radar-satellite-stop.sh
+            continuity-results/candidate/continuity/font-2.0/instrumentation.log
+            continuity-results/candidate/continuity/font-2.0/continuity-capture-proof.json
+            continuity-results/candidate/continuity/continuity-analysis.json
+            continuity-results/candidate/continuity/continuity-status.txt
+            continuity-results/candidate/continuity/continuity-analysis-frames/radar-satellite-2x-*/**
           if-no-files-found: error
