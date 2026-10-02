@@ -1434,12 +1434,12 @@ private fun NativeRadarMap(
                 override fun onConfigurationChanged(newConfig: Configuration) = Unit
 
                 override fun onLowMemory() {
-                    if (!destroyed) mapView.onLowMemory()
+                    if (!destroyed) controller.onLowMemory()
                 }
 
                 override fun onTrimMemory(level: Int) {
                     if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW && !destroyed)
-                        mapView.onLowMemory()
+                        controller.onLowMemory()
                 }
             }
         context.registerComponentCallbacks(memory)
@@ -1513,6 +1513,8 @@ private class NativeRadarController(
     // blank frame; opacity zero/visibility none stop MapLibre from requesting its tiles.
     private var paintedFrame: RadarFrame? = null
     private val paintedLayers = linkedSetOf<String>()
+    private val retireOnHide = mutableSetOf<String>()
+    private var cameraMoving = false
     private var pendingLayers: Map<String, Float>? = null
     private var pendingFrame: RadarFrame? = null
     private var pendingSince = 0L
@@ -1548,6 +1550,7 @@ private class NativeRadarController(
     private var alertsCenter: LatLng? = null
     private val gridCache = linkedMapOf<String, RadarGrid>()
     private val cameraIdle = MapLibreMap.OnCameraIdleListener {
+        cameraMoving = false
         map?.let { ready ->
             session.latitude = ready.cameraPosition.target?.latitude ?: session.latitude
             session.longitude = ready.cameraPosition.target?.longitude ?: session.longitude
@@ -1568,7 +1571,10 @@ private class NativeRadarController(
             )
                 loadAlerts()
         }
-        if ((current?.leadMinutes ?: 0) > 0) updateNowcast()
+        // Native tile coverage/cache membership can change during a gesture. Keep
+        // the painted field, but recreate every unpainted source for this viewport.
+        retireUnpaintedRasters()
+        updateLayers()
     }
     private val failed = MapView.OnDidFailLoadingMapListener { message ->
         if (!disposed) {
@@ -1627,9 +1633,12 @@ private class NativeRadarController(
                     )
                 ready.addOnCameraIdleListener(cameraIdle)
                 ready.addOnCameraMoveStartedListener {
-                    // Tile completion/error evidence belongs to the old viewport. Cached
-                    // rasters can still commit via native fully-rendered after a pan.
-                    tileReadiness.clear()
+                    cameraMoving = true
+                    retireOnHide.addAll(paintedLayers.filter { it in cached })
+                    frameRequest++
+                    acceptRenderedFrame = false
+                    rasterWaitJob?.cancel()
+                    readinessJob?.cancel()
                     windView?.pause()
                     snapshotJob?.cancel()
                     numbersJob?.cancel()
@@ -1665,6 +1674,41 @@ private class NativeRadarController(
             snapshotJob?.cancel()
             windView?.pause()
         }
+    }
+
+    fun onLowMemory() {
+        if (disposed) return
+        // MapLibre clears its hidden decoded tile cache on memory pressure. Retire
+        // those source instances too, so their old EndParse evidence cannot make a
+        // later cached-frame selection look ready before its replacement loads.
+        // Keep the painted sources: their active tiles are the continuity fallback.
+        frameRequest++
+        acceptRenderedFrame = false
+        rasterWaitJob?.cancel()
+        readinessJob?.cancel()
+        pendingLayers = null
+        pendingFrame = null
+        retireOnHide.addAll(paintedLayers.filter { it in cached })
+        retireUnpaintedRasters()
+        view.onLowMemory()
+        updateLayers()
+    }
+
+    private fun retireUnpaintedRasters() {
+        cached.filter { it !in paintedLayers }.forEach(::removeRaster)
+    }
+
+    private fun removeRaster(id: String) {
+        style?.removeLayer(id)
+        style?.removeSource("$id-source")
+        tileReadiness.remove("$id-source")
+        cached.remove(id)
+        retireOnHide.remove(id)
+    }
+
+    private fun hideWeatherLayer(id: String) {
+        if (id in retireOnHide) removeRaster(id)
+        else style?.getLayer(id)?.setProperties(visibility(Property.NONE))
     }
 
     fun loadStyle(light: Boolean, retry: Int) {
@@ -1703,6 +1747,7 @@ private class NativeRadarController(
         nowcastBusy = false
         style = null
         cached.clear()
+        retireOnHide.clear()
         paintedLayers.clear()
         paintedFrame = null
         painted(null)
@@ -1769,6 +1814,7 @@ private class NativeRadarController(
                 }
             }
             cached.clear()
+            retireOnHide.clear()
             paintedLayers.clear()
             paintedFrame = null
             painted(null)
@@ -1817,7 +1863,7 @@ private class NativeRadarController(
         if (visible.isEmpty() && forecast == null) {
             // An empty replacement dataset is a new layer/range, not another animation
             // frame. Do not mislabel the previous field as the newly chosen variable.
-            paintedLayers.forEach { s.getLayer(it)?.setProperties(visibility(Property.NONE)) }
+            paintedLayers.forEach(::hideWeatherLayer)
             paintedLayers.clear()
             paintedFrame = null
             painted(null)
@@ -1898,8 +1944,11 @@ private class NativeRadarController(
     private fun commitPendingFrame(fully: Boolean): Boolean {
         val s = style ?: return false
         val next = pendingLayers ?: return false
-        if (pendingFrame?.key != current?.key || renderedSerial <= pendingAfterSerial) return false
-        val sourceIds = next.keys.filter { !it.startsWith("wx-nowcast-") }.map { "$it-source" }
+        if (cameraMoving || pendingFrame?.key != current?.key || renderedSerial <= pendingAfterSerial) return false
+        // An unchanged painted backdrop is retained in place; only replacement
+        // sources need new readiness evidence before the handoff.
+        val sourceIds = next.keys.filter { it !in paintedLayers && !it.startsWith("wx-nowcast-") }
+            .map { "$it-source" }
         val now = android.os.SystemClock.uptimeMillis()
         // Native completion is preferred. Source-local parse completion avoids coupling
         // weather to a broken glyph/basemap request, and is checked after a native draw.
@@ -1910,7 +1959,7 @@ private class NativeRadarController(
         next.forEach { (id, opacity) ->
             s.getLayerAs<RasterLayer>(id)?.setProperties(visibility(Property.VISIBLE), rasterOpacity(opacity))
         }
-        paintedLayers.filter { it !in next }.forEach { s.getLayer(it)?.setProperties(visibility(Property.NONE)) }
+        paintedLayers.filter { it !in next }.forEach(::hideWeatherLayer)
         paintedLayers.clear()
         paintedLayers.addAll(next.keys)
         paintedFrame = pendingFrame
@@ -1926,14 +1975,11 @@ private class NativeRadarController(
     }
 
     private fun trimRasterCache() {
-        val s = style ?: return
+        if (style == null) return
         val keep = paintedLayers + pendingLayers.orEmpty().keys
         while (cached.size > 8) {
             val oldest = cached.firstOrNull { it !in keep } ?: break
-            s.removeLayer(oldest)
-            s.removeSource("$oldest-source")
-            tileReadiness.remove("$oldest-source")
-            cached.remove(oldest)
+            removeRaster(oldest)
         }
     }
 

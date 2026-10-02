@@ -261,24 +261,44 @@ internal fun RadarDistanceScale(label: String, width: Float, modifier: Modifier 
     }
 }
 
-/** Position the complete measured label inside its scale, including negative/three-digit values. */
+/** Keep labels on their values, thinning crowded interior ticks instead of squeezing the ink. */
 @Composable
 internal fun RadarLegendTicks(ticks: List<Pair<Float, String>>, compact: Boolean) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val labelSize = if (compact) 8.sp else 9.sp
     Layout(content = {
-        ticks.forEach { (_, label) -> Text(label, fontSize = if (compact) 8.sp else 9.sp, lineHeight = if (compact) 10.sp else 12.sp,
-            color = muted, maxLines = 1) }
-    }, modifier = Modifier.fillMaxWidth().heightIn(min = if (compact) 12.dp else 15.dp)) { measurables, constraints ->
+        ticks.forEachIndexed { index, (_, label) ->
+            Text(label, fontSize = labelSize, lineHeight = if (compact) 10.sp else 12.sp,
+                color = muted, maxLines = 1, modifier = Modifier.testTag("radar_legend_tick_$index"))
+        }
+    }, modifier = Modifier.fillMaxWidth().heightIn(min = if (compact) 12.dp else 15.dp)
+        .testTag("radar_legend_ticks")) { measurables, constraints ->
         val labels = measurables.map { it.measure(constraints.copy(minWidth = 0, minHeight = 0)) }
         val height = maxOf(constraints.minHeight, labels.maxOfOrNull { it.height } ?: 0)
+        // A fixed two-pixel gap all but disappears on high-density/large-font screens.
+        // Keep at least 6 dp of paper, scaling the separation with the actual type size.
+        val gap = maxOf(6.dp.roundToPx(), (labelSize.toPx() * .55f).toInt())
+        val positions = labels.mapIndexed { index, label ->
+            (ticks[index].first * constraints.maxWidth - label.width / 2).toInt()
+                .coerceIn(0, (constraints.maxWidth - label.width).coerceAtLeast(0))
+        }
         layout(constraints.maxWidth, height) {
-            var previousRight = -1
-            labels.forEachIndexed { i, label ->
-                val x = (ticks[i].first * constraints.maxWidth - label.width / 2).toInt()
-                    .coerceIn(0, (constraints.maxWidth - label.width).coerceAtLeast(0))
-                if (x >= previousRight + 2) {
-                    label.placeRelative(x, 0)
-                    previousRight = x + label.width
+            if (labels.isNotEmpty()) {
+                // Reserve the first and last reference values before optional interior ticks.
+                // Starting at the first label also preserves an anchor clamped to x = 0.
+                labels.first().placeRelative(positions.first(), 0)
+                var previousRight = positions.first() + labels.first().width
+                val last = labels.lastIndex
+                if (last > 0 && positions[last] >= previousRight + gap) {
+                    for (index in 1 until last) {
+                        val x = positions[index]
+                        val right = x + labels[index].width
+                        if (x >= previousRight + gap && right + gap <= positions[last]) {
+                            labels[index].placeRelative(x, 0)
+                            previousRight = right
+                        }
+                    }
+                    labels[last].placeRelative(positions[last], 0)
                 }
             }
         }
