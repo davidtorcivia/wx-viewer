@@ -38,6 +38,7 @@ class RadarTileReadinessTest {
         assertFalse(readiness.ready(listOf(source)))
         readiness.record(source, "a", TileOperation.RequestedFromNetwork)
         readiness.record(source, "b", TileOperation.RequestedFromCache)
+        readiness.record(source, "b", TileOperation.StartParse)
         readiness.record(source, "a", TileOperation.LoadFromNetwork)
         readiness.record(source, "b", TileOperation.LoadFromCache)
         assertFalse(readiness.ready(listOf(source)))
@@ -71,6 +72,34 @@ class RadarTileReadinessTest {
         readiness.record("source", "a", TileOperation.EndParse)
         assertFalse(readiness.failed(listOf("source")))
         assertTrue(readiness.ready(listOf("source")))
+    }
+
+    @Test fun nativeParentCacheProbesDoNotBlockCompletedWeatherTiles() {
+        val readiness = RadarTileReadiness()
+        for (tile in listOf("3/1/2", "3/1/3", "5/6/10", "5/6/11")) {
+            readiness.record("source", tile, TileOperation.RequestedFromNetwork)
+            readiness.record("source", tile, TileOperation.StartParse)
+            readiness.record("source", tile, TileOperation.EndParse)
+        }
+        // Captured native sequence: optional z4 cache probes never emit a terminal event.
+        for (tile in listOf("4/3/5", "4/3/6", "4/4/5", "4/4/6"))
+            readiness.record("source", tile, TileOperation.RequestedFromCache)
+        assertTrue("Optional parent-cache misses are not unfinished raster work", readiness.ready(listOf("source")))
+    }
+
+    @Test fun cachedNetworkInterestWithoutAnotherDownloadRetainsDecodedReadiness() {
+        val readiness = RadarTileReadiness()
+        readiness.record("source", "tile", TileOperation.EndParse)
+        readiness.record("source", "tile", TileOperation.RequestedFromNetwork)
+        assertTrue("Native cached return need not emit another EndParse", readiness.ready(listOf("source")))
+        readiness.record("source", "tile", TileOperation.StartParse)
+        assertFalse("Actual new parse work must still finish", readiness.ready(listOf("source")))
+        readiness.record("source", "tile", TileOperation.EndParse)
+        assertTrue(readiness.ready(listOf("source")))
+        readiness.record("source", "missing", TileOperation.RequestedFromNetwork)
+        assertFalse("An unparsed network tile is still required", readiness.ready(listOf("source")))
+        readiness.record("source", "missing", TileOperation.Error)
+        assertTrue(readiness.failed(listOf("source")))
     }
 
     @Test fun cancellingHiddenLayerInterestRetainsPreviouslyParsedTileEvidence() {
