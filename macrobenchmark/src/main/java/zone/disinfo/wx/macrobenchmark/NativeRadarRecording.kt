@@ -20,6 +20,9 @@ internal class NativeRadarRecording(
     private val started = SystemClock.elapsedRealtime()
     private val video = File(directory, "$name.mp4")
     private val log = File(directory, "$name-screenrecord.log")
+    private val launchScript = File(directory, "$name-launch.sh")
+    private val probeScript = File(directory, "$name-probe.sh")
+    private val stopScript = File(directory, "$name-stop.sh")
     private val manifest = JSONObject()
         .put("schemaVersion", 1).put("layer", layer).put("fontScale", fontScale.toDouble())
         .put("theme", "dark").put("playbackSpeed", "1x").put("video", video.name).put("displayWidth", device.displayWidth)
@@ -38,14 +41,28 @@ internal class NativeRadarRecording(
         check(directory.isDirectory || directory.mkdirs())
         require(video.absolutePath.matches(Regex("[A-Za-z0-9_./-]+")))
         save()
-        // Redirect every inherited descriptor before backgrounding; executeShellCommand must
-        // return while the encoder continues. Only this recorder's validated PID is stopped.
-        pid = device.executeShellCommand("sh -c 'screenrecord --bit-rate 1500000 --time-limit 40 " +
-            "${video.absolutePath} >${log.absolutePath} 2>&1 </dev/null & echo \$!'").trim()
-        check(pid.matches(Regex("[0-9]+"))) { "screenrecord failed to start: $pid" }
-        SystemClock.sleep(700)
-        check(device.executeShellCommand("sh -c 'kill -0 $pid 2>/dev/null && echo running'").trim() == "running") {
-            "Native video encoder did not start: ${log.takeIf(File::exists)?.readText()}"
+        // UiAutomation executes a command string with Runtime.exec tokenization; shell
+        // quotes are not argv grouping. Put shell syntax in a test-owned file and pass
+        // only its safe absolute path as argv. No production permissions are changed.
+        launchScript.writeText("""
+            #!/system/bin/sh
+            screenrecord --bit-rate 1500000 --time-limit 40 ${video.absolutePath} >${log.absolutePath} 2>&1 </dev/null &
+            echo ${'$'}!
+        """.trimIndent() + "\n")
+        try {
+            pid = device.executeShellCommand("sh ${launchScript.absolutePath}").trim()
+            check(pid.matches(Regex("[0-9]+"))) { "screenrecord failed to start: $pid; log=${encoderLog()}" }
+            // Match this output path as well as PID so an exited/reused process ID cannot
+            // cause us to signal another recorder. All shell syntax stays in script files.
+            val ownsProcess = "kill -0 $pid 2>/dev/null && grep -F -q ${video.absolutePath} /proc/$pid/cmdline 2>/dev/null"
+            probeScript.writeText("#!/system/bin/sh\nif $ownsProcess; then echo running; fi\n")
+            stopScript.writeText("#!/system/bin/sh\nif $ownsProcess; then kill -2 $pid; fi\n")
+            SystemClock.sleep(700)
+            check(recordingRunning()) { "Native video encoder did not start: pid=$pid; log=${encoderLog()}" }
+        } catch (error: Throwable) {
+            manifest.put("failure", error.toString())
+            save()
+            throw error
         }
         // Shell/process readiness is observable, but screenrecord exposes no first-frame
         // fence. Keep this startup estimate explicit; all-frame continuity is independent
@@ -72,12 +89,13 @@ internal class NativeRadarRecording(
         manifest.put("endElapsedRealtimeMs", SystemClock.elapsedRealtime())
         try {
             if (pid.matches(Regex("[0-9]+"))) {
-                device.executeShellCommand("kill -2 $pid")
+                device.executeShellCommand("sh ${stopScript.absolutePath}")
                 val deadline = SystemClock.elapsedRealtime() + 10_000
                 while (SystemClock.elapsedRealtime() < deadline &&
-                    device.executeShellCommand("sh -c 'kill -0 $pid 2>/dev/null && echo running'").trim() == "running") {
+                    recordingRunning()) {
                     SystemClock.sleep(100)
                 }
+                check(!recordingRunning()) { "Native video encoder did not stop: pid=$pid; log=${encoderLog()}" }
             }
             check(video.isFile && video.length() > 1_024) {
                 "No native recording: ${log.takeIf(File::exists)?.readText()}"
@@ -87,6 +105,11 @@ internal class NativeRadarRecording(
             throw error
         } finally { save() }
     }
+
+    private fun recordingRunning() =
+        device.executeShellCommand("sh ${probeScript.absolutePath}").trim() == "running"
+
+    private fun encoderLog() = log.takeIf(File::exists)?.readText() ?: "No encoder log created"
 
     private fun save() = File(directory, "$name.capture.json").writeText(manifest.toString(2))
 }
