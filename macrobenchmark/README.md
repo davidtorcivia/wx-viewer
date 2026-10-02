@@ -28,7 +28,15 @@ The ordinary Android workflow also runs `scripts/run-offline-preview-smoke.sh` a
 
 ## Continuous native radar evidence
 
-The existing layer shards additionally run `allLayersContinuousNativeFrames` against the
+The Android workflow's explicit `native_video_evidence` dispatch input (default `false`)
+enables this expensive 20-video sweep. Ordinary push/PR runs retain all five original
+functional/native lanes and their 30-minute budget, without video capture or decoder setup.
+An opted-in dispatch keeps the same lanes and exact prebuilt APKs, with a 45-minute outer
+device budget so analysis cannot displace saved/empty-offline coverage. To opt in while
+running the layer script directly, set `WX_NATIVE_VIDEO_EVIDENCE=true`; standalone
+`continuity` mode and the comparison workflow remain explicitly requested strict diagnostics.
+
+When opted in, the existing layer shards run `allLayersContinuousNativeFrames` against the
 fixture-free minified preview at actual Android font scales 1.0 and 2.0, in dark theme.
 Every layer uses one multi-frame range (hourly model fields; observed radar/satellite),
 with three play intervals and four first-physical-tap seeks, including seeks while playing.
@@ -39,6 +47,10 @@ all original functional/UI phases retain their original resolution. This is an a
 experiment, not an assumed cadence improvement: unchanged 24 fps / 150 ms diagnostics must be
 checked against new PTS, and inadequate software-emulator cadence remains inconclusive.
 The original 28 live and 56 offline assertions still run unchanged.
+The CI gate allows only measured low/irregular cadence and frame-acquisition gaps to be
+nonblocking diagnostics. Their original inconclusive status, nonzero analyzer result and
+thresholds remain visible; missing/incomplete evidence, pixel/field findings and correctness
+failures still block. A default run reports video evidence as not requested, never proven.
 
 `NativeRadarRecording` captures compositor output with Android `screenrecord`, rather than
 polling screenshots. The host analyzer decodes every original encoded frame without temporal
