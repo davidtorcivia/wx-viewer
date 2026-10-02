@@ -109,6 +109,32 @@ class PixelFaultInjectionTest(unittest.TestCase):
                     exact = [f for f in failures if f["code"] == "opaque_field_coverage_loss"]
                     self.assertEqual([(f["firstFrame"], f["lastFrame"]) for f in exact], [(89, 88 + length)])
 
+    def test_real_native_low_wind_palette_stays_flagged_inconclusive(self):
+        fixture = HERE / "fixtures"
+        source = json.loads((fixture / "wind-native-source.json").read_text())
+        self.assertEqual(source["workflowRun"], 36964452341)
+        reference = np.asarray(Image.open(fixture / "wind-native-reference.png").convert("RGB"))
+        low = np.asarray(Image.open(fixture / "wind-native-low-chroma.png").convert("RGB"))
+        self.assertEqual(reference.shape, low.shape)
+        # Only reporting changes: feed the same two unaltered native crops through
+        # the real pixel detector and require its original coverage flag to remain.
+        for layer in ("Wind", "Wind gusts"):
+            with self.subTest(layer=layer):
+                data = fixture_metadata(layer=layer, width=reference.shape[1], height=reference.shape[0])
+                rows, _, failures = continuity.analyze_frames([reference, low], np.asarray([0., 30000.]), data, [])
+                self.assertIn("opaque_field_coverage_loss", rows[1]["flags"])
+                coverage = [f for f in failures if f["code"] == "opaque_field_coverage_loss"]
+                self.assertTrue(coverage)
+                self.assertTrue(all(f["status"] == "inconclusive" for f in coverage))
+                self.assertTrue(all("palette or opacity" in f["message"] for f in coverage))
+                result = continuity.finish_capture({"failures": failures})
+                self.assertEqual(result["status"], "inconclusive")
+                self.assertFalse(result["passed"])
+                black_rows, _, black_failures = continuity.analyze_frames(
+                    [reference, np.zeros_like(reference)], np.asarray([0., 30000.]), data, [])
+                self.assertIn("black_native_view", black_rows[1]["flags"])
+                self.assertEqual(continuity.finish_capture({"failures": black_failures})["status"], "failed")
+
     def test_partial_field_dropout_cannot_hide_in_global_average(self):
         frames = fixture_frames()
         frames[100] = frames[100].copy()
