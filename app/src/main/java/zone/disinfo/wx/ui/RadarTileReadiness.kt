@@ -39,7 +39,9 @@ internal class RadarTileReadiness {
             TileOperation.Cancelled -> {
                 state.pending -= tile
                 state.failed -= tile
-                state.parsed -= tile
+                // Cancelling interest in a hidden layer does not discard its decoded
+                // native tile cache. A warm reactivation can render without EndParse.
+                // Camera changes/source eviction explicitly clear this evidence instead.
             }
             else -> Unit // Downloaded bytes are not yet a parsed/renderable tile.
         }
