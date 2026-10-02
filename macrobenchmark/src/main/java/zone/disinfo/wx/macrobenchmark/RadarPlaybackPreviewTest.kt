@@ -590,47 +590,31 @@ class RadarPlaybackPreviewTest {
         check(device.takeScreenshot(file)) { "Playback shape screenshot failed" }
         val bitmap = requireNotNull(BitmapFactory.decodeFile(file.absolutePath))
         try {
-            val radius = maxOf(1, bounds.width() / 64)
-            fun brightness(x: Int, y: Int): Double {
-                var total = 0L
-                var count = 0
-                for (py in y - radius..y + radius) for (px in x - radius..x + radius) {
-                    val color = bitmap.getPixel(px.coerceIn(0, bitmap.width - 1),
-                        py.coerceIn(0, bitmap.height - 1))
-                    total += Color.red(color) + Color.green(color) + Color.blue(color)
-                    count += 3
-                }
-                return total.toDouble() / count
-            }
-            val insetX = (bounds.width() * .12f).toInt()
-            val insetY = (bounds.height() * .12f).toInt()
-            // The semantics include the minimum touch target. These inset corner patches
-            // are inside a square fill but outside a circle; the side-center patch is
-            // inside the circle and clear of both the play triangle and pause glyph.
-            val corners = listOf(
-                Point(bounds.left + insetX, bounds.top + insetY),
-                Point(bounds.right - insetX, bounds.top + insetY),
-                Point(bounds.left + insetX, bounds.bottom - insetY),
-                Point(bounds.right - insetX, bounds.bottom - insetY),
-            )
-            val reference = (brightness(bounds.left - insetX, bounds.centerY()) +
-                brightness(bounds.right + insetX, bounds.centerY())) / 2
-            val fill = brightness(bounds.left + bounds.width() / 5, bounds.centerY())
-            val cornerBrightness = corners.map { brightness(it.x, it.y) }
-            val maximumDarkening = cornerBrightness.maxOf { reference - it }
-            val fillContrast = reference - fill
-            val round = reference >= 180 && fillContrast >= 32 && maximumDarkening <= 24
-            evidence.put(JSONObject().put("check", name).put("result", if (round) "passed" else "failed")
+            val shape = PlaybackShapeOracle.inspect(bitmap.width, bitmap.height,
+                PlaybackShapeOracle.Bounds(bounds.left, bounds.top, bounds.right, bounds.bottom),
+                bitmap::getPixel)
+            evidence.put(JSONObject().put("check", name).put("result", if (shape.round) "passed" else "failed")
                 .put("image", file.name).put("controlBounds", bounds.toShortString())
-                .put("referenceBrightness", reference).put("fillBrightness", fill)
-                .put("cornerBrightness", JSONArray(cornerBrightness))
-                .put("maximumCornerDarkening", maximumDarkening).put("maximumAllowedDarkening", 24)
-                .put("fillContrast", fillContrast).put("minimumFillContrast", 32)
-                .put("minimumLightBackground", 180).put("sampleRadiusPx", radius))
-            emitDiagnostic("wxRadarPlayback", "$name: ${if (round) "passed" else "failed"}")
-            check(round) {
-                "$name: expected circular fill on the light transport card; " +
-                    "reference=$reference, fillContrast=$fillContrast, corners=$cornerBrightness; image=${file.name}"
+                .put("referenceBrightness", shape.referenceBrightness).put("fillBrightness", shape.fillBrightness)
+                .put("insideBrightness", JSONArray(shape.insideBrightness))
+                .put("outsideBrightness", JSONArray(shape.outsideBrightness))
+                .put("minimumPaperBrightness", shape.minimumPaperBrightness)
+                .put("maximumPaperBrightness", shape.maximumPaperBrightness)
+                .put("minimumInkBrightness", shape.minimumInkBrightness)
+                .put("maximumInkBrightness", shape.maximumInkBrightness)
+                .put("paperOpacity", PlaybackShapeOracle.PAPER_OPACITY)
+                .put("inkOpacity", PlaybackShapeOracle.INK_OPACITY)
+                .put("maximumTransmittedMapRange", PlaybackShapeOracle.PAPER_MAP_RANGE)
+                .put("maximumTransmittedInkRange", PlaybackShapeOracle.INK_MAP_RANGE)
+                .put("compositeRounding", PlaybackShapeOracle.COMPOSITE_ROUNDING)
+                .put("minimumLightBackground", PlaybackShapeOracle.MINIMUM_LIGHT_BACKGROUND)
+                .put("sampleRadiusPx", shape.sampleRadiusPx).put("failures", JSONArray(shape.failures)))
+            emitDiagnostic("wxRadarPlayback", "$name: ${if (shape.round) "passed" else "failed"}")
+            check(shape.round) {
+                "$name: expected circular fill on the translucent transport card; " +
+                    "failures=${shape.failures}, reference=${shape.referenceBrightness}, " +
+                    "inkRange=${shape.minimumInkBrightness}..${shape.maximumInkBrightness}, " +
+                    "paperRange=${shape.minimumPaperBrightness}..${shape.maximumPaperBrightness}; image=${file.name}"
             }
         } finally {
             bitmap.recycle()
