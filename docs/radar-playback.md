@@ -31,6 +31,13 @@ shown before the previous raster is hidden, with opacity transitions disabled.
 Nowcast images alternate two sources so replacing an image never clears the
 currently painted source while the new bitmap uploads.
 
+Readiness belongs to a native source's decoded cache lifetime, not merely its URL.
+Camera gestures defer handoffs; at camera idle, unpainted raster sources are
+recreated for the new viewport. Memory-pressure callbacks likewise retire hidden
+sources before trimming native memory. Painted pixels stay visible, but their
+sources are retired when next hidden so historical parse events cannot certify an
+evicted tile. An unchanged painted backdrop does not block replacement readiness.
+
 Numeric labels use the painted frame's grid and are added above the entire
 basemap. Styles can interleave symbols and later road/bridge lines, so inserting
 weather values before the first symbol allows roads to cross the numbers. A
@@ -76,6 +83,14 @@ metadata/style and restores the previous intent.
 - Existing live layer/range and saved/empty offline matrices, cold-process cache,
   native advection, release-fixture checks and ordinary application tests remain
   in the aggregate validation script
+- `RadarRasterContinuityTest` drives production controllers through controlled
+  delayed/failed tiles, stale seeks, cached returns, camera movement, memory trim,
+  empty selection and nowcast image swaps. An unrelated basemap never completes;
+  actual compositor crops must retain a known outgoing or target weather composite.
+  These sampled screenshots prove the observed states, not every display refresh
+- Continuous native video analysis separately checks every encoded frame and
+  rejects insufficient frame cadence or recordings that omit later interactions;
+  an inconclusive capture is never reported as smooth rendering
 - Slow keyed-input cancellation behavior is code-reviewed; the live server's
   latency is uncontrolled and is not a deterministic network-delay test
 
