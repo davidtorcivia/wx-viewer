@@ -3,6 +3,7 @@ package zone.disinfo.wx.macrobenchmark
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.graphics.Rect
 import android.os.SystemClock
 import android.os.Bundle
 import android.os.Build
@@ -18,6 +19,7 @@ import androidx.test.uiautomator.UiScrollable
 import androidx.test.uiautomator.UiSelector
 import java.io.File
 import java.util.regex.Pattern
+import kotlin.math.abs
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assume.assumeTrue
@@ -134,6 +136,153 @@ class RadarLayersPreviewTest {
         check(failures.isEmpty()) { failures.joinToString("\n") }
     }
 
+
+    /** Every encoded compositor frame is inspected on the host, including the transitions
+     * hidden by the isolated screenshots in the existing functional sweep. */
+    @Test
+    fun allLayersContinuousNativeFrames() {
+        assumeTrue(args.getString("wxRadarContinuityPreview") == "true")
+        check(shell("getprop ro.kernel.qemu") == "1") { "Disposable emulator required" }
+        check(context.packageManager.getApplicationInfo(target, 0).flags and
+            ApplicationInfo.FLAG_DEBUGGABLE == 0) { "Actual non-debuggable preview required" }
+        check(context.resources.configuration.uiMode and
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK == android.content.res.Configuration.UI_MODE_NIGHT_YES) {
+            "Native continuity must exercise actual dark-theme map rendering"
+        }
+        val fontScale = args.getString("wxFontScale", "1.0").toFloat()
+        check(abs(shell("settings get system font_scale").toFloat() - fontScale) < .01f) {
+            "Expected real Android font scale $fontScale"
+        }
+        Configurator.getInstance().waitForIdleTimeout = 0
+        instrumentation.setInTouchMode(true)
+        val failures = mutableListOf<String>()
+        coldStart()
+        for (layer in shardLayers) {
+            try {
+                select(layer)
+                // Model fields use the hourly range. Observed radar/satellite exercise their
+                // real native image/tile paths, including any available nowcast transitions.
+                val range = if (layer in listOf("Radar", "Satellite", "Radar + satellite")) "Now" else "36h"
+                repeat(4) {
+                    if (label(await(By.desc("Time range"))) != range) await(By.desc("Time range")).click()
+                }
+                check(label(await(By.desc("Time range"))) == range)
+                repeat(3) {
+                    if (label(await(By.desc("Animation speed"))) != "1×") await(By.desc("Animation speed")).click()
+                }
+                check(label(await(By.desc("Animation speed"))) == "1×")
+                settle(layer, 101)
+                check(verifyFrameProgress(layer, 101).getBoolean("animated")) {
+                    "Continuous evidence needs a genuinely multi-frame $layer/$range"
+                }
+                // Maximise unobstructed map area at both font scales. Region is measured from
+                // actual control bounds rather than a hard-coded crop that could include text.
+                device.findObject(By.desc("Collapse radar legend"))?.click()
+                SystemClock.sleep(500)
+                val map = await(By.descStartsWith("Interactive weather map")).visibleBounds
+                val topControls = await(By.res("radar_top_controls")).visibleBounds
+                val transport = await(By.res("radar_transport")).visibleBounds
+                val scale = await(By.res("radar_distance_scale")).visibleBounds
+                val region = Rect(map.left + map.width() / 12,
+                    maxOf(map.top + map.height() / 8, topControls.bottom + 16,
+                        (device.findObject(By.res("radar_saved_timestamp"))?.visibleBounds?.bottom ?: map.top) + 16),
+                    map.right - map.width() / 12, minOf(transport.top, scale.top) - 16)
+                check(region.width() >= 300 && region.height() >= 180) {
+                    "Insufficient unobstructed native map pixels at font $fontScale: $region"
+                }
+                val prefix = "continuity-${slug(layer)}"
+                check(device.takeScreenshot(File(output(), "$prefix-before.png")))
+                val recording = NativeRadarRecording(device, output(), prefix, layer, fontScale, region)
+                try {
+                    fun stamp() = label(await(By.res("radar_frame_stamp")))
+                    fun hold(milliseconds: Long) {
+                        val deadline = SystemClock.elapsedRealtime() + milliseconds
+                        var previous = ""
+                        do {
+                            assertAlive()
+                            val current = stamp()
+                            if (current != previous) { recording.mark("frame_stamp", current); previous = current }
+                            SystemClock.sleep(80)
+                        } while (SystemClock.elapsedRealtime() < deadline)
+                    }
+                    fun seek(fraction: Float) {
+                        recording.mark("scrub_start", stamp(), fraction)
+                        val track = await(By.res("radar_slider_track")).visibleBounds
+                        check(device.click(track.left + (track.width() * fraction).toInt(), track.centerY()))
+                        await(By.desc("Play animation"))
+                        retryFreshUi("first physical seek to $fraction") {
+                            continuitySeekFraction()?.let { if (abs(it - fraction) <= .03f) true else null }
+                        }
+                        recording.mark("seek_selected", stamp(), fraction)
+                        // Selection intent is immediate. Completion is the actual painted
+                        // target; keep recording the retained old frame during decode/upload.
+                        retryFreshUi("selected native frame finishes painting", timeoutMs = 90_000) {
+                            check(device.findObject(By.desc("Play animation")) != null &&
+                                device.findObject(By.desc("Pause animation")) == null) {
+                                "Playback resumed during the selected frame load"
+                            }
+                            if (device.findObject(By.res("radar_frame_loading")) == null) true else null
+                        }
+                        recording.mark("scrub_end", stamp(), fraction)
+                        hold(900)
+                    }
+                    hold(1_000)
+                    repeat(2) { round ->
+                        recording.mark("play_start", stamp())
+                        await(By.desc("Play animation")) { it.isEnabled }.click()
+                        await(By.desc("Pause animation"))
+                        val initialStamp = stamp()
+                        hold(6_000)
+                        check(stamp() != initialStamp) { "$layer did not advance during recorded playback" }
+                        // First physical seek while playing must pause on the requested frame.
+                        seek(if (round == 0) .80f else .15f)
+                        recording.mark("play_end", stamp())
+                        seek(if (round == 0) .20f else .70f)
+                    }
+                    // Explicit pause/resume cycles are recorded independently of scrub-to-pause.
+                    recording.mark("play_start", stamp())
+                    await(By.desc("Play animation")) { it.isEnabled }.click()
+                    await(By.desc("Pause animation"))
+                    hold(3_000)
+                    await(By.desc("Pause animation")).click()
+                    recording.mark("play_end", stamp())
+                    hold(1_000)
+                    recording.complete()
+                } catch (failure: Throwable) {
+                    recording.failed(failure)
+                    throw failure
+                } finally { recording.close() }
+                check(device.takeScreenshot(File(output(), "$prefix-after.png")))
+                instrumentation.sendStatus(0, Bundle().apply {
+                    putString("wxRadarContinuity", "$layer fontScale=$fontScale: video captured; host pixel analysis required")
+                })
+            } catch (failure: Throwable) {
+                failures += "$layer: $failure"
+                screenshot("continuity-${slug(layer)}-failure", requireRadar = false)
+                reportFailure(failure, "continuity-${slug(layer)}-failure")
+                // Keep independent layer coverage even when baseline playback/coverage fails.
+                coldStart()
+            }
+        }
+        File(output(), "continuity-capture-proof.json").writeText(JSONObject()
+            .put("fontScale", fontScale.toDouble()).put("shardIndex", shardIndex)
+            .put("shardCount", shardCount).put("failures", JSONArray(failures))
+            .put("layers", JSONArray(shardLayers)).toString(2))
+        check(failures.isEmpty()) { failures.joinToString("\n") }
+    }
+
+    private fun continuitySeekFraction(): Float? {
+        fun visit(node: android.view.accessibility.AccessibilityNodeInfo?): Float? {
+            if (node == null) return null
+            if (node.isVisibleToUser && node.viewIdResourceName == "radar_scrubber") {
+                node.rangeInfo?.let { if (it.max > it.min) return (it.current - it.min) / (it.max - it.min) }
+                return node.stateDescription?.toString()?.substringBefore(" percent")?.toFloatOrNull()?.div(100f)
+            }
+            for (index in 0 until node.childCount) visit(node.getChild(index))?.let { return it }
+            return null
+        }
+        return visit(instrumentation.uiAutomation.rootInActiveWindow)
+    }
 
     @Test
     fun allLayersRemainResponsiveOffline() {

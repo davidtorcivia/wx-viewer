@@ -230,15 +230,16 @@ class RadarPlaybackPreviewTest {
             assertCameraResponds("observed-only-radar-native-pan")
             return@runPreviewProof
         }
-        // Forecast assets may take 55 seconds cold. The first-transition grace is deliberately
-        // 90 seconds; once started, require sustained changes rather than one eventual tick.
+        // Forecast assets may take 55 seconds cold. Spend the existing 90-second cold
+        // grace on the first actually painted future frame, not a requested-time label.
+        val forecastRequestedAt = SystemClock.elapsedRealtime()
         scrub(.95f)
-        // Start inside the future portion, before any observed-frame change can consume
-        // the long first-change grace needed by a genuinely cold motion-input request.
-        await(By.textStartsWith("FORECAST +"))
+        await(By.textStartsWith("FORECAST +"), timeoutMs = 90_000)
+        record("cold-radar-first-painted-forecast", JSONObject().put("stamp", stamp())
+            .put("paintWaitMs", SystemClock.elapsedRealtime() - forecastRequestedAt))
         play()
         assertAdvances("cold-radar-forecast", minimumChanges = 5, durationMs = 18_000,
-            firstChangeTimeoutMs = 90_000, requireForecast = true)
+            requireForecast = true)
         pause()
         assertPaused("radar-paused")
         play()
@@ -552,12 +553,22 @@ class RadarPlaybackPreviewTest {
     private fun assertPaused(name: String) {
         await(By.desc("Play animation"))
         SystemClock.sleep(300)
+        val requestedAt = SystemClock.elapsedRealtime()
+        // Pause intent and physical seek position were checked immediately by callers.
+        // The displayed time now follows the actually painted frame. A cold selected
+        // frame may legitimately arrive after pausing while old pixels remain visible.
+        until(90_000, "$name selected native frame finishes loading") {
+            check(device.findObject(By.desc("Play animation")) != null &&
+                device.findObject(By.desc("Pause animation")) == null) { "$name resumed while awaiting its selected frame" }
+            device.findObject(By.res("radar_frame_loading")) == null
+        }
         val before = stamp()
         repeat(8) {
             SystemClock.sleep(250)
             check(stamp() == before) { "$name advanced while paused: $before -> ${stamp()}" }
         }
-        record(name, JSONObject().put("heldStamp", before).put("heldMs", 2_000))
+        record(name, JSONObject().put("heldStamp", before).put("heldMs", 2_000)
+            .put("paintWaitMs", SystemClock.elapsedRealtime() - requestedAt - 2_000))
     }
 
     private fun assertCameraResponds(name: String) {
