@@ -6,7 +6,7 @@ mode=${1:-all}
 [[ "$mode" == all || "$mode" == playback || "$mode" == layers || "$mode" == continuity ]] || { echo "Unknown radar validation mode: $mode" >&2; exit 2; }
 shard_count=${WX_LAYER_SHARD_COUNT:-1}
 shard_index=${WX_LAYER_SHARD_INDEX:-0}
-[[ "$shard_count" =~ ^[1-3]$ && "$shard_index" =~ ^[0-2]$ && "$shard_index" -lt "$shard_count" ]] || exit 2
+[[ "$shard_count" =~ ^[1-5]$ && "$shard_index" =~ ^[0-4]$ && "$shard_index" -lt "$shard_count" ]] || exit 2
 cd "$(dirname "$0")/.."
 [[ $(adb shell getprop ro.kernel.qemu | tr -d '\r') == 1 ]] || { echo 'Disposable emulator required'; exit 2; }
 original_radar_log=$(adb shell getprop log.tag.RadarScreen | tr -d '\r')
