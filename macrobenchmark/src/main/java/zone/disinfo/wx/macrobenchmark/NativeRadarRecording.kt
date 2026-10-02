@@ -3,6 +3,7 @@ package zone.disinfo.wx.macrobenchmark
 import android.graphics.Rect
 import android.os.SystemClock
 import androidx.test.uiautomator.UiDevice
+import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
@@ -16,6 +17,8 @@ internal class NativeRadarRecording(
     fontScale: Float,
     region: Rect,
 ) : AutoCloseable {
+    private val arguments = InstrumentationRegistry.getArguments()
+    private val densityDpi = InstrumentationRegistry.getInstrumentation().context.resources.displayMetrics.densityDpi
     private val events = JSONArray()
     private val started = SystemClock.elapsedRealtime()
     private val video = File(directory, "$name.mp4")
@@ -27,6 +30,13 @@ internal class NativeRadarRecording(
         .put("schemaVersion", 1).put("layer", layer).put("fontScale", fontScale.toDouble())
         .put("theme", "dark").put("playbackSpeed", "1x").put("video", video.name).put("displayWidth", device.displayWidth)
         .put("displayHeight", device.displayHeight)
+        .put("displayDensityDpi", densityDpi)
+        .put("displaySizeRaw", device.executeShellCommand("wm size").trim())
+        .put("displayDensityRaw", device.executeShellCommand("wm density").trim())
+        .put("captureProfile", arguments.getString("wxCaptureProfile") ?: "unspecified")
+        .put("originalDisplaySize", arguments.getString("wxCaptureOriginalSize") ?: JSONObject.NULL)
+        .put("originalDisplayDensityDpi", arguments.getString("wxCaptureOriginalDensity")?.toIntOrNull() ?: JSONObject.NULL)
+        .put("maximumRecordingSeconds", 180).put("bitRateBitsPerSecond", 1200000)
         .put("mapRegion", JSONObject().put("left", region.left).put("top", region.top)
             .put("right", region.right).put("bottom", region.bottom))
         .put("pixelSource", "Android screenrecord native compositor, all encoded frames; no screenshot sampling")
@@ -46,7 +56,7 @@ internal class NativeRadarRecording(
         // only its safe absolute path as argv. No production permissions are changed.
         launchScript.writeText("""
             #!/system/bin/sh
-            screenrecord --bit-rate 1500000 --time-limit 40 ${video.absolutePath} >${log.absolutePath} 2>&1 </dev/null &
+            screenrecord --bit-rate 1200000 --time-limit 180 ${video.absolutePath} >${log.absolutePath} 2>&1 </dev/null &
             echo ${'$'}!
         """.trimIndent() + "\n")
         try {

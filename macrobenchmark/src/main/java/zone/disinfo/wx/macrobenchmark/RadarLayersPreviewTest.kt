@@ -40,7 +40,7 @@ class RadarLayersPreviewTest {
         .joinToString("|", "^(", ")$") { Pattern.quote(it) }))
     // Shard only the independent layer/range sweeps. Keep the full catalog above for
     // menu detection and the cross-layer interruption stress on shard zero.
-    private val shardCount = args.getString("wxLayerShardCount", "1").toInt().also { require(it in 1..3) }
+    private val shardCount = args.getString("wxLayerShardCount", "1").toInt().also { require(it in 1..5) }
     private val shardIndex = args.getString("wxLayerShardIndex", "0").toInt().also { require(it in 0 until shardCount) }
     private val shardLayers = layers.filterIndexed { index, _ -> index % shardCount == shardIndex }
     private val results = JSONArray()
@@ -148,6 +148,13 @@ class RadarLayersPreviewTest {
         check(context.resources.configuration.uiMode and
             android.content.res.Configuration.UI_MODE_NIGHT_MASK == android.content.res.Configuration.UI_MODE_NIGHT_YES) {
             "Native continuity must exercise actual dark-theme map rendering"
+        }
+        check(device.displayWidth == requireNotNull(args.getString("wxCaptureWidth")).toInt() &&
+            device.displayHeight == requireNotNull(args.getString("wxCaptureHeight")).toInt()) {
+            "Physical capture dimensions did not match the configured acquisition profile"
+        }
+        check(context.resources.displayMetrics.densityDpi == requireNotNull(args.getString("wxCaptureDensity")).toInt()) {
+            "Physical capture density did not match the configured acquisition profile"
         }
         val fontScale = args.getString("wxFontScale", "1.0").toFloat()
         check(abs(shell("settings get system font_scale").toFloat() - fontScale) < .01f) {
