@@ -63,7 +63,7 @@ def summarize(root, count, shard):
 
 if __name__ == '__main__':
     root, count, shard = Path(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
-    assert 1 <= count <= 3 and 0 <= shard < count
+    assert 1 <= count <= 5 and 0 <= shard < count
     report = summarize(root, count, shard)
     print(f"Native comparison: {report['status']}")
     for failure in report['failures']:

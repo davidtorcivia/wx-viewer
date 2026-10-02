@@ -10,7 +10,8 @@ import textwrap
 import time
 import unittest
 
-SOURCE = Path(__file__).resolve().parents[2] / 'macrobenchmark/src/main/java/zone/disinfo/wx/macrobenchmark/NativeRadarRecording.kt'
+ROOT = Path(__file__).resolve().parents[2]
+SOURCE = ROOT / 'macrobenchmark/src/main/java/zone/disinfo/wx/macrobenchmark/NativeRadarRecording.kt'
 
 
 class NativeRecordingShellContractTest(unittest.TestCase):
@@ -69,3 +70,55 @@ class NativeRecordingShellContractTest(unittest.TestCase):
                     os.kill(pid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
+
+
+class NativeRecordingProfileContractTest(unittest.TestCase):
+    def test_actual_profile_block_preserves_dp_and_restores_on_exit_and_signal(self):
+        import json
+        script = (ROOT / 'scripts/run-radar-continuity-preview.sh').read_text()
+        # Execute the real profile/restore block against a stateful disposable adb mock.
+        # No Android or host display state changes are made by this host regression.
+        block = script[script.index('original_night='):script.index('for font in 1.0 2.0; do')]
+        mock = '''import json, os, sys
+p = os.environ['WX_MOCK_DISPLAY']; d = json.load(open(p)); a = sys.argv[1:]
+if a[:3] == ['shell','wm','size']:
+ if len(a) == 3:
+  print('Physical size: 1080x1920')
+  if d['size'] is not None: print('Override size: ' + d['size'])
+ else: d['size'] = None if a[3] == 'reset' else a[3]
+elif a[:3] == ['shell','wm','density']:
+ if len(a) == 3:
+  print('Physical density: 420')
+  if d['density'] is not None: print('Override density: ' + d['density'])
+ else: d['density'] = None if a[3] == 'reset' else a[3]
+elif a[:4] == ['shell','cmd','uimode','night']:
+ if len(a) == 4: print('Night mode: ' + d['night'])
+ else: d['night'] = a[4]
+elif a[:5] == ['shell','settings','get','system','font_scale']: print(d['font'])
+elif a[:5] == ['shell','settings','put','system','font_scale']: d['font'] = a[5]
+elif a[:5] == ['shell','settings','delete','system','font_scale']: d['font'] = 'null'
+elif a[:3] != ['shell','am','force-stop']: raise AssertionError(a)
+json.dump(d, open(p,'w'))
+'''
+        for ending, code in (('exit 0', 0), ('fail_setup deliberate-test-failure', 2), ('kill -TERM $$', 143)):
+            for override in (False, True):
+                with self.subTest(ending=ending, override=override), tempfile.TemporaryDirectory() as folder:
+                    root = Path(folder); state = root / 'state.json'; adb = root / 'adb'
+                    initial = {'size': '1080x1920' if override else None,
+                               'density': '420' if override else None, 'night': 'no', 'font': '1.15'}
+                    state.write_text(json.dumps(initial)); adb.write_text(f'#!{sys.executable}\n' + mock); adb.chmod(0o700)
+                    test = root / 'profile.sh'
+                    test.write_text('set -euo pipefail\nfail_setup() { exit 2; }\n' + block +
+                                    '\nprintf "PROFILE=%s:%s:%s\\n" "$capture_width" "$capture_height" "$capture_density"\n' + ending + '\n')
+                    env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ.get('PATH', ''), WX_MOCK_DISPLAY=str(state))
+                    result = subprocess.run(['bash', str(test)], capture_output=True, text=True, env=env, timeout=10)
+                    self.assertEqual(result.returncode, code, result.stderr)
+                    self.assertIn('PROFILE=540:960:210', result.stdout)
+                    self.assertEqual(json.loads(state.read_text()), initial)
+
+    def test_measured_action_windows_fit_bounded_180_second_recorder(self):
+        source = SOURCE.read_text()
+        self.assertIn('--time-limit 180', source)
+        self.assertIn('.put("maximumRecordingSeconds", 180)', source)
+        self.assertIn('.put("displayDensityDpi", densityDpi)', source)
+        self.assertIn('.put("originalDisplaySize",', source)
