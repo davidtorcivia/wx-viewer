@@ -146,6 +146,7 @@ class RadarPlaybackPreviewTest {
             temperature36h()
             await(By.descStartsWith("Interactive weather map centered near $city"))
             assertCameraResponds("place-$city-native-pan")
+            assertPlaybackRound("place-$city-playback-shape")
             play()
             assertAdvances("place-$city-play", minimumChanges = 3, durationMs = 6_000)
             pause()
@@ -393,7 +394,7 @@ class RadarPlaybackPreviewTest {
                 }
                 check(!await(By.desc("Play animation")).isEnabled) { "Playback must be disabled while offline" }
                 assertPaused("offline-$phase-fallback")
-                device.takeScreenshot(File(output(), "offline-$phase-fallback.png"))
+                assertOfflineMapContent(phase)
             } catch (error: Throwable) {
                 rememberFailure("status", error)
             }
@@ -425,6 +426,7 @@ class RadarPlaybackPreviewTest {
                 pause()
                 requirePixelChange(restored, "online-$phase-recovered-native-pixels")
                 assertCameraResponds("online-$phase-recovered-native-pan")
+                assertPlaybackRound("online-$phase-playback-shape")
             } catch (error: Throwable) {
                 rememberFailure("reconnect", error)
             }
@@ -571,9 +573,88 @@ class RadarPlaybackPreviewTest {
 
     private data class MapCapture(val bitmap: Bitmap, val name: String, val region: Rect)
 
-    private fun capture(name: String): MapCapture {
+    private fun assertPlaybackRound(name: String) {
+        val bounds = await(By.res("radar_playback")).visibleBounds
+        val file = File(output(), "%03d-%s.png".format(++captureNumber, slug(name)))
+        check(device.takeScreenshot(file)) { "Playback shape screenshot failed" }
+        val bitmap = requireNotNull(BitmapFactory.decodeFile(file.absolutePath))
+        try {
+            val radius = maxOf(1, bounds.width() / 64)
+            fun brightness(x: Int, y: Int): Double {
+                var total = 0L
+                var count = 0
+                for (py in y - radius..y + radius) for (px in x - radius..x + radius) {
+                    val color = bitmap.getPixel(px.coerceIn(0, bitmap.width - 1),
+                        py.coerceIn(0, bitmap.height - 1))
+                    total += Color.red(color) + Color.green(color) + Color.blue(color)
+                    count += 3
+                }
+                return total.toDouble() / count
+            }
+            val insetX = (bounds.width() * .12f).toInt()
+            val insetY = (bounds.height() * .12f).toInt()
+            // The semantics include the minimum touch target. These inset corner patches
+            // are inside a square fill but outside a circle; the side-center patch is
+            // inside the circle and clear of both the play triangle and pause glyph.
+            val corners = listOf(
+                Point(bounds.left + insetX, bounds.top + insetY),
+                Point(bounds.right - insetX, bounds.top + insetY),
+                Point(bounds.left + insetX, bounds.bottom - insetY),
+                Point(bounds.right - insetX, bounds.bottom - insetY),
+            )
+            val reference = (brightness(bounds.left - insetX, bounds.centerY()) +
+                brightness(bounds.right + insetX, bounds.centerY())) / 2
+            val fill = brightness(bounds.left + bounds.width() / 5, bounds.centerY())
+            val cornerBrightness = corners.map { brightness(it.x, it.y) }
+            val maximumDarkening = cornerBrightness.maxOf { reference - it }
+            val fillContrast = reference - fill
+            val round = reference >= 180 && fillContrast >= 32 && maximumDarkening <= 24
+            evidence.put(JSONObject().put("check", name).put("result", if (round) "passed" else "failed")
+                .put("image", file.name).put("controlBounds", bounds.toShortString())
+                .put("referenceBrightness", reference).put("fillBrightness", fill)
+                .put("cornerBrightness", JSONArray(cornerBrightness))
+                .put("maximumCornerDarkening", maximumDarkening).put("maximumAllowedDarkening", 24)
+                .put("fillContrast", fillContrast).put("minimumFillContrast", 32)
+                .put("minimumLightBackground", 180).put("sampleRadiusPx", radius))
+            emitDiagnostic("wxRadarPlayback", "$name: ${if (round) "passed" else "failed"}")
+            check(round) {
+                "$name: expected circular fill on the light transport card; " +
+                    "reference=$reference, fillContrast=$fillContrast, corners=$cornerBrightness; image=${file.name}"
+            }
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    private fun assertOfflineMapContent(phase: String) {
+        // This fixture has just rendered a live temperature map. Both the saved-image
+        // overlay and retained native tiles must contain imagery, not uniform paper
+        // behind a truthful-looking Saved label. Use field bounds because a saved Image
+        // can cover the native map's accessibility node, and exclude all map controls.
+        val candidate = capture("offline-$phase-fallback", await(By.res("radar_field")).visibleBounds)
+        try {
+            val colors = nativeColorBins(candidate)
+            val hasContent = colors > 12 // Same content criterion as awaitNativeCapture.
+            val name = "offline-$phase-map-content"
+            evidence.put(JSONObject().put("check", name)
+                .put("result", if (hasContent) "passed" else "failed")
+                .put("colorBins", colors).put("minimumColorBinsExclusive", 12)
+                .put("sampleStepPx", 4).put("colorChannelBinWidth", 16)
+                .put("image", candidate.name).put("mapRegion", candidate.region.toShortString())
+                .put("savedImageVisible", device.findObject(By.res("radar_saved_image")) != null))
+            emitDiagnostic("wxRadarPlayback", "$name: ${if (hasContent) "passed" else "failed"}")
+            check(hasContent) {
+                "$name: offline map is blank/flat ($colors color bins; required >12); " +
+                    "image=${candidate.name}, crop=${candidate.region.toShortString()}"
+            }
+        } finally {
+            candidate.bitmap.recycle()
+        }
+    }
+
+    private fun capture(name: String, mapBounds: Rect? = null): MapCapture {
         alive()
-        val map = await(By.descStartsWith("Interactive weather map")).visibleBounds
+        val map = mapBounds ?: await(By.descStartsWith("Interactive weather map")).visibleBounds
         // Keep clear of the legend, scale, transport and header. A static location marker
         // cannot satisfy the forecast pixel-change threshold.
         val region = Rect(map.left + map.width() / 10, map.top + map.height() * 32 / 100,
