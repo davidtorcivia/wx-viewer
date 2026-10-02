@@ -2,6 +2,11 @@
 # Never points at a user device. Seed public NYC configuration in disposable debug storage,
 # then replace it with the exact R8-minified preview (same CI test signing key).
 set -euo pipefail
+mode=${1:-all}
+[[ "$mode" == all || "$mode" == playback || "$mode" == layers ]] || { echo "Unknown radar validation mode: $mode" >&2; exit 2; }
+shard_count=${WX_LAYER_SHARD_COUNT:-1}
+shard_index=${WX_LAYER_SHARD_INDEX:-0}
+[[ "$shard_count" =~ ^[1-3]$ && "$shard_index" =~ ^[0-2]$ && "$shard_index" -lt "$shard_count" ]] || exit 2
 cd "$(dirname "$0")/.."
 [[ $(adb shell getprop ro.kernel.qemu | tr -d '\r') == 1 ]] || { echo 'Disposable emulator required'; exit 2; }
 original_radar_log=$(adb shell getprop log.tag.RadarScreen | tr -d '\r')
@@ -45,6 +50,7 @@ adb logcat -c
 suite_status=0
 # Run cold observed→forecast playback before the all-layer sweep can warm those assets.
 # Every proof targets the installed preview; the external test APK carries no app fixtures.
+if [[ "$mode" != layers ]]; then
 for method in coldRadarFreshnessAndAvailableForecastPlayback sustainedPlaybackPixelsAndInterruptedFlowsOnMinifiedPreview; do
  remote=/sdcard/Android/media/zone.disinfo.wx.macrobenchmark/radar-playback-$method
  mkdir -p "$output/playback-$method"
@@ -60,11 +66,13 @@ for method in coldRadarFreshnessAndAvailableForecastPlayback sustainedPlaybackPi
   suite_status=1
  fi
 done
+fi
+if [[ "$mode" == playback ]]; then exit "$suite_status"; fi
 remote=/sdcard/Android/media/zone.disinfo.wx.macrobenchmark/radar-layers-preview
 set +e
 timeout 900 adb shell am instrument -w -r \
  -e class zone.disinfo.wx.macrobenchmark.RadarLayersPreviewTest#allLiveLayersRangesInteractionsAndLifecycle \
- -e wxRadarLayersPreview true -e additionalTestOutputDir "$remote" \
+ -e wxRadarLayersPreview true -e wxLayerShardCount "$shard_count" -e wxLayerShardIndex "$shard_index" -e additionalTestOutputDir "$remote" \
  zone.disinfo.wx.macrobenchmark/androidx.test.runner.AndroidJUnitRunner 2>&1 | tee "$output/instrumentation.log"
 status=${PIPESTATUS[0]}
 set -e
@@ -84,7 +92,7 @@ for state in saved empty; do
  set +e
  timeout 300 adb shell am instrument -w -r \
   -e class zone.disinfo.wx.macrobenchmark.RadarLayersPreviewTest#allLayersRemainResponsiveOffline \
-  -e wxRadarLayersOffline true -e additionalTestOutputDir "$remote" \
+  -e wxRadarLayersOffline true -e wxLayerShardCount "$shard_count" -e wxLayerShardIndex "$shard_index" -e additionalTestOutputDir "$remote" \
   zone.disinfo.wx.macrobenchmark/androidx.test.runner.AndroidJUnitRunner 2>&1 | tee "$output/offline-$state.log"
  status=${PIPESTATUS[0]}
  set -e
