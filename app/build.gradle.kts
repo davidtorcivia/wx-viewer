@@ -14,8 +14,8 @@ android {
         applicationId = "zone.disinfo.wx"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.2.6-preview"
+        versionCode = 10
+        versionName = "0.2.7-preview"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes {
@@ -79,6 +79,8 @@ dependencies {
     implementation("org.maplibre.gl:android-sdk:11.8.0")
     add("benchmarkImplementation", "androidx.profileinstaller:profileinstaller:1.4.1")
 
+    // Match MapLibre's runtime client for isolated, test-only tile transport fixtures.
+    androidTestImplementation("com.squareup.okhttp3:okhttp:4.12.0")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
