@@ -25,9 +25,12 @@ import java.time.Instant
 import kotlinx.coroutines.runBlocking
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import okhttp3.Dispatcher
 import okhttp3.Interceptor
@@ -73,6 +76,10 @@ class RadarRasterContinuityTest {
 
     private fun verify(overlay: String, field: String? = null, nowcast: Boolean = false) {
         val context = instrumentation.targetContext
+        // The baseline comparison isolates pixel continuity from the independently tested
+        // painted-time fix. Candidate/default execution always keeps every time assertion.
+        val pixelNegativeControl = InstrumentationRegistry.getArguments()
+            .getString("wxPixelNegativeControl") == "true"
         DisplayCache.initialize(context)
         val nonce = System.nanoTime().toString()
         val server = "https://raster-continuity-$nonce.invalid"
@@ -119,6 +126,20 @@ class RadarRasterContinuityTest {
             maxRequestsPerHost = 64
         }).addInterceptor(transport).build()
         val started = SystemClock.uptimeMillis()
+        val tileEvents = ConcurrentLinkedQueue<JSONObject>()
+        val tileEventCount = AtomicInteger()
+        val nativeFully = AtomicBoolean(false)
+        val nativeRenderCount = AtomicLong()
+        var observedView: MapView? = null
+        val tileListener = MapView.OnTileActionListener { operation, x, y, z, wrap, overscaledZ, source ->
+            if (tileEventCount.incrementAndGet() <= 2_000) tileEvents.add(JSONObject()
+                .put("elapsedMs", SystemClock.uptimeMillis() - started).put("source", source)
+                .put("tile", "$z/$x/$y/$wrap/$overscaledZ").put("operation", operation.toString()))
+        }
+        val renderListener = MapView.OnDidFinishRenderingFrameListener { fully, _, _ ->
+            nativeFully.set(fully)
+            nativeRenderCount.incrementAndGet()
+        }
         var sampleNumber = 0
         var outcome = "running"
         var failure: String? = null
@@ -161,6 +182,7 @@ class RadarRasterContinuityTest {
                 val entry = counts.json().put("sequence", sampleNumber)
                     .put("elapsedMs", SystemClock.uptimeMillis() - started).put("phase", phase)
                     .put("displayedStamp", runCatching { stamp() }.getOrNull() ?: JSONObject.NULL)
+                    .put("nativeFully", nativeFully.get()).put("nativeRenderCount", nativeRenderCount.get())
                 evidence.put(entry)
                 val weatherName = "%04d-%s-weather.png".format(sampleNumber, phase)
                 val weather = Bitmap.createBitmap(screenshot, bounds.left, bounds.top, bounds.width(), bounds.height())
@@ -203,7 +225,9 @@ class RadarRasterContinuityTest {
             do {
                 val counts = capture(phase, samples == 0)
                 assertComposite(counts, phase, listOf(marker))
-                expectedStamp?.let { assertTrue("$overlay/$phase changed the visible stamp before ready weather", stamp() == it) }
+                if (!pixelNegativeControl) expectedStamp?.let {
+                    assertTrue("$overlay/$phase changed the visible stamp before ready weather", stamp() == it)
+                }
                 val expected = reference.fraction(marker)
                 assertTrue("$overlay/$phase lost weather pixels at sample ${sampleNumber - 1}: " +
                     "${counts.fraction(marker)} < ${expected * .85}; a basemap/clock cannot pass",
@@ -227,11 +251,20 @@ class RadarRasterContinuityTest {
         try {
             instrumentation.runOnMainSync {
                 MapLibre.getInstance(context)
-                // Unique style cache key prevents a previously cached real basemap bypassing
-                // the HTTP fixture. No cache deletion or production networking changes.
+                // Native may return a cached style before its revalidation response. Its
+                // unrelated source can therefore retain the preceding fixture's host.
+                // Rebind only this isolated fake-host namespace to the current transport;
+                // each real weather source already has this fixture's unique server URL.
                 FileSource.getInstance(context).setResourceTransform { _, url ->
-                    if (url.startsWith("https://tiles.openfreemap.org/styles/"))
-                        "$url?native-continuity=$nonce" else url
+                    val uri = android.net.Uri.parse(url)
+                    when {
+                        url.startsWith("https://tiles.openfreemap.org/styles/") ->
+                            "$url?native-continuity=$nonce"
+                        uri.scheme == "https" && uri.path.orEmpty().startsWith("/unrelated/") &&
+                            uri.host.orEmpty().matches(Regex("raster-continuity-[0-9]+[.]invalid")) ->
+                            server + url.substringAfter("https://${uri.host}")
+                        else -> url
+                    }
                 }
                 HttpRequestUtil.setOkHttpClient(client)
             }
@@ -247,6 +280,11 @@ class RadarRasterContinuityTest {
             compose.waitUntil(15_000) {
                 instrumentation.runOnMainSync {
                     attached.set(findMaps(root.get()).singleOrNull { it.isAttachedToWindow && it.width > 0 })
+                    if (observedView == null) attached.get()?.let {
+                        it.addOnTileActionListener(tileListener)
+                        it.addOnDidFinishRenderingFrameListener(renderListener)
+                        observedView = it
+                    }
                 }
                 attached.get() != null
             }
@@ -352,6 +390,10 @@ class RadarRasterContinuityTest {
             throw error
         } finally {
             transport.releaseAll()
+            instrumentation.runOnMainSync {
+                observedView?.removeOnTileActionListener(tileListener)
+                observedView?.removeOnDidFinishRenderingFrameListener(renderListener)
+            }
             // Dispose native views before restoring global SDK transport. Other tests and all
             // release/preview code keep the default real network client and resource URLs.
             runCatching { compose.runOnIdle { showing.value = false } }
@@ -367,9 +409,11 @@ class RadarRasterContinuityTest {
             File(directory, "metrics.json").writeText(JSONObject()
                 .put("overlay", if (nowcast) "nowcast" else overlay).put("field", field ?: JSONObject.NULL)
                 .put("outcome", outcome).put("failure", failure ?: JSONObject.NULL)
+                .put("pixelNegativeControl", pixelNegativeControl)
                 .put("capture", "UiAutomation.takeScreenshot: actual Android compositor")
                 .put("crop", crop?.let { JSONArray(listOf(it.left, it.top, it.right, it.bottom)) })
-                .put("requests", transport.requestEvidence()).put("samples", evidence).toString(2))
+                .put("requests", transport.requestEvidence()).put("tileEventsTotal", tileEventCount.get())
+                .put("tileEvents", JSONArray(tileEvents.toList())).put("samples", evidence).toString(2))
         }
     }
 
@@ -506,13 +550,16 @@ class RadarRasterContinuityTest {
                 .body(bytes.toResponseBody(type.toMediaType())).build()
             if (url.host == "tiles.openfreemap.org" && url.queryParameter("native-continuity") == nonce)
                 return response(200, "application/json", style.toByteArray())
+            // Source URLs can survive native style caching independently of the transformed
+            // style URI. Only a prior test's exact fake namespace/path may use this latch.
+            if (url.scheme == "https" && url.host.matches(Regex("raster-continuity-[0-9]+[.]invalid")) &&
+                url.encodedPath.startsWith("/unrelated/")) {
+                basemapRequests.incrementAndGet()
+                if (!basemapRelease.await(60, TimeUnit.SECONDS))
+                    throw IOException("Bounded unrelated basemap fixture expired")
+                return response(404, "text/plain", byteArrayOf())
+            }
             if (url.host == host) {
-                if (url.encodedPath.startsWith("/unrelated/")) {
-                    basemapRequests.incrementAndGet()
-                    if (!basemapRelease.await(60, TimeUnit.SECONDS))
-                        throw IOException("Bounded unrelated basemap fixture expired")
-                    return response(404, "text/plain", byteArrayOf())
-                }
                 val gate = tiles.entries.firstOrNull { url.encodedPath.startsWith(it.key) }?.value
                     ?: return response(404, "text/plain", byteArrayOf())
                 gate.requests.incrementAndGet()

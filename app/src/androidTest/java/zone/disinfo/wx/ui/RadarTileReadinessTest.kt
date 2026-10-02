@@ -73,6 +73,19 @@ class RadarTileReadinessTest {
         assertTrue(readiness.ready(listOf("source")))
     }
 
+    @Test fun cancellingHiddenLayerInterestRetainsPreviouslyParsedTileEvidence() {
+        val readiness = RadarTileReadiness()
+        readiness.record("source", "a", TileOperation.EndParse)
+        readiness.record("source", "a", TileOperation.Cancelled)
+        assertTrue("Decoded warm tiles can reactivate without another parse", readiness.ready(listOf("source")))
+        readiness.record("source", "b", TileOperation.RequestedFromNetwork)
+        assertFalse("A newly needed viewport tile still owns readiness", readiness.ready(listOf("source")))
+        readiness.record("source", "b", TileOperation.Cancelled)
+        assertTrue(readiness.ready(listOf("source")))
+        readiness.clear()
+        assertFalse("Viewport change retires all old coverage", readiness.ready(listOf("source")))
+    }
+
     @Test fun newViewportRequestsAndEvictionInvalidatePriorReadiness() {
         val readiness = RadarTileReadiness()
         readiness.record("source", "a", TileOperation.EndParse)
