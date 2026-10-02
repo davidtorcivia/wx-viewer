@@ -25,3 +25,41 @@ Primary references: [Macrobenchmark setup](https://developer.android.com/topic/p
 The ordinary Android workflow also runs `scripts/run-offline-preview-smoke.sh` after the device suite. A guarded debug-instrumentation phase persists two public fixture places, history, ensemble runs and real native radar snapshots. The script then installs the fixture-free minified `preview` over the same app data and starts `OfflinePreviewSmokeTest` in a separate process. It verifies a new target PID, both cached Weather places, Plumes/Radar, navigation, a real network flap and another cold launch. Radio changes are guarded to a disposable emulator; both test `finally` and shell `trap` restore the initial state. Host networking is untouched.
 
 `android-offline-preview-evidence` contains seed/preview manifests and hashes, process IDs, actual connectivity results, logs and screenshots. These functional checks are separate from A/B/A measurements. The two guarded radar seed/verify phases and the guarded shared seed intentionally skip in the ordinary suite, then execute explicitly; report skips and phase results separately.
+
+## Continuous native radar evidence
+
+The existing layer shards additionally run `allLayersContinuousNativeFrames` against the
+fixture-free minified preview at actual Android font scales 1.0 and 2.0, in dark theme.
+Every layer uses one multi-frame range (hourly model fields; observed radar/satellite),
+with three play intervals and four first-physical-tap seeks, including seeks while playing.
+The original 28 live and 56 offline assertions still run unchanged.
+
+`NativeRadarRecording` captures compositor output with Android `screenrecord`, rather than
+polling screenshots. The host analyzer decodes every original encoded frame without temporal
+resampling. Its measured native-map region excludes the header, legend, locate button, scale,
+and transport. It retains MP4s, event sidecars, per-frame metrics, cadence, failure frames and
+contact strips. Transparent clear-weather products need map continuity; temperature/dew/wind/
+gust additionally require persistent colored-field coverage and actual map-pixel progress.
+Insufficient recording cadence, unavailable content, missing videos or incomplete gestures are
+inconclusive/failing evidence, never a smooth-playback pass. This proves only the recorded
+frames at the measured cadence, not that a software emulator or encoder observes every
+physical-display refresh. Play/seek timestamps use an explicitly reported startup-time estimate,
+not an encoder first-frame synchronization fence. Wind particles can establish native pixel
+activity even when a raster is unchanged; these recordings do not establish weather-frame
+identity. The separate deterministic production-controller handoff test covers raster identity.
+
+The `Native radar continuity comparison` workflow is dispatch-only. It builds the unchanged
+`0b69bee21196178bb92f91fc8b00495fb263713e` application and the selected candidate once, then
+uses the candidate's same external test APK for both on one emulator per layer shard. Neither
+baseline source nor rendering algorithms receive an overlay. App data are reset and identical
+public NYC/Philadelphia settings seeded before each leg. Live upstream weather can change
+between legs; APK/source hashes, timestamps, labels and raw videos are retained to disclose
+that limitation. Baseline visual regressions are expected evidence rather than candidate gate
+failures, but absent/truncated/insufficient-cadence baseline evidence is not a valid comparison.
+Videos use 1.5 Mbps with a 40-second maximum (longer/incomplete actions fail coverage) and are uploaded separately by leg/shard/font to keep each downloadable
+artifact small. No CI-signed package is a user-delivery APK.
+
+Host video analysis needs ffmpeg/ffprobe, NumPy and Pillow. The runner creates an isolated,
+pinned Python environment only when those Python dependencies are absent. To exercise an
+already installed/seeded preview, run `scripts/run-radar-continuity-preview.sh`; the normal
+`run-radar-layers-preview.sh continuity` mode also performs the seed/install steps.
