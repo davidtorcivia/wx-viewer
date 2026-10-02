@@ -124,6 +124,56 @@ class CardExpansionE2eTest {
     }
 
     @Test
+    fun solarDetailRevealsGraduallyWithoutMovingItsAnchorAndCanReverse() {
+        showWeather()
+        scrollTo("condition_sun", sectionKey = "conditions")
+        // Leave room under the trigger to inspect actual painted intermediate solar frames.
+        val overview = node("weather_overview").fetchSemanticsNode()
+        val triggerTop = node("condition_sun").fetchSemanticsNode().boundsInRoot.top
+        compose.runOnIdle {
+            checkNotNull(overview.config[SemanticsActions.ScrollBy].action)(0f, triggerTop - 64f)
+        }
+        compose.waitForIdle()
+        node("condition_sun").performClick()
+        val openHeight = height("condition_detail_row_later12")
+        val anchorTop = node("condition_detail_row_later12").fetchSemanticsNode().positionInRoot.y
+        assertTrue("Solar detail should contain the full solar and lunar readout", openHeight > 400)
+        node("condition_sun").performClick()
+        assertEquals(0, height("condition_detail_row_later12"))
+        compose.mainClock.autoAdvance = false
+
+        node("condition_sun").performClick()
+        advance(96)
+        val earlyHeight = height("condition_detail_row_later12")
+        assertTrue("Solar reveal must ease in, rather than fly open: $earlyHeight/$openHeight",
+            earlyHeight in 1 until (openHeight * .18f).toInt())
+        advance(144)
+        val middleHeight = height("condition_detail_row_later12")
+        assertTrue("Solar reveal must progress through a substantial intermediate frame",
+            middleHeight in (earlyHeight + 1) until (openHeight * .75f).toInt())
+        assertEquals("The reveal stays attached beneath the sunrise/sunset card", anchorTop,
+            node("condition_detail_row_later12").fetchSemanticsNode().positionInRoot.y, 1f)
+        assertPaintedFrame("condition_detail_row_later12", "solar-mid-open")
+
+        // Reverse a partially opened reveal twice; only the final requested detail survives.
+        node("condition_sun").performClick()
+        advance(96)
+        node("web_condition_detail_sun").assertExists()
+        node("condition_sun").performClick()
+        advance(1_200)
+        assertEquals(openHeight, height("condition_detail_row_later12"))
+        assertState("condition_sun", "Expanded")
+        assertPaintedFrame("condition_detail_row_later12", "solar-open")
+        node("condition_sun").performClick()
+        advance(240)
+        assertTrue(height("condition_detail_row_later12") in 1 until openHeight)
+        assertPaintedFrame("condition_detail_row_later12", "solar-mid-close")
+        advance(1_200)
+        assertEquals(0, height("condition_detail_row_later12"))
+        node("web_condition_detail_sun").assertDoesNotExist()
+    }
+
+    @Test
     fun dailyCloseKeepsPaintAndReopensWhileCollapsing() {
         showWeather()
         val card = "day_$detailDay"
@@ -171,6 +221,18 @@ class CardExpansionE2eTest {
         advance(32)
         node("web_condition_detail_humidity").assertDoesNotExist()
         assertEquals(0, height("condition_detail_row_feels"))
+
+        compose.mainClock.autoAdvance = true
+        scrollTo("condition_sun", sectionKey = "conditions")
+        compose.mainClock.autoAdvance = false
+        node("condition_sun").performClick()
+        advance(32)
+        node("web_condition_detail_sun").assertExists()
+        assertTrue(height("condition_detail_row_later12") > 0)
+        node("condition_sun").performClick()
+        advance(32)
+        node("web_condition_detail_sun").assertDoesNotExist()
+        assertEquals(0, height("condition_detail_row_later12"))
 
         compose.mainClock.autoAdvance = true
         scrollTo("day_$detailDay", sectionKey = "daily")
