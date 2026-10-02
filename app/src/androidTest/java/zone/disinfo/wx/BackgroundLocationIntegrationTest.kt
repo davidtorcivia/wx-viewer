@@ -10,6 +10,8 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.action.ViewActions.click
 import androidx.test.espresso.assertion.ViewAssertions.matches
+import androidx.test.espresso.assertion.ViewAssertions.doesNotExist
+import androidx.test.espresso.matcher.RootMatchers.isDialog
 import androidx.test.espresso.matcher.ViewMatchers.isDisplayed
 import androidx.test.espresso.matcher.ViewMatchers.withText
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -130,10 +132,15 @@ class BackgroundLocationIntegrationTest {
         try {
             compose.onNodeWithTag("tab_alerts").performClick()
             compose.onNodeWithTag("background_location").performScrollTo().performClick()
+            // The native AlertDialog takes focus away from Compose's activity window.
+            // Select its root explicitly so Espresso cannot keep waiting on the unfocused
+            // BASE_APPLICATION decor during the handoff from the Compose click.
             onView(withText("Update your location in the background?"))
+                .inRoot(isDialog())
                 .check(matches(isDisplayed()))
-            onView(withText("Not now")).perform(click())
+            onView(withText("Not now")).inRoot(isDialog()).perform(click())
             compose.waitForIdle()
+            onView(withText("Update your location in the background?")).check(doesNotExist())
             assertFalse(store.load().backgroundLocationEnabled)
             assertEquals(setOf("nyc"), store.load().alerts.enabledPlaceIds)
             assertFalse(store.load().alerts.enabled)
