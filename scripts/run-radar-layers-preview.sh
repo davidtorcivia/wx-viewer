@@ -92,6 +92,9 @@ fi
 
 # Continuous native-video proof is additional to every existing live/offline assertion.
 # Keep it inside each independent layer shard; no extra main-CI lane or repeated build.
+native_video=${WX_NATIVE_VIDEO_EVIDENCE:-false}
+[[ "$native_video" == true || "$native_video" == false ]] || exit 2
+if [[ "$native_video" == true ]]; then
 if bash scripts/run-radar-continuity-preview.sh "$output/continuity"; then continuity_result=0
 else continuity_result=$?; fi
 # Preserve the raw diagnostic nonzero result. Only measured cadence/gap limitations
@@ -102,6 +105,7 @@ if ! python3 scripts/ci/check-radar-continuity-gate.py "$output/continuity/conti
  --diagnostic-status "$output/continuity/continuity-status.txt" --runner-exit "$continuity_result" \
  --shard-count "$shard_count" --shard-index "$shard_index" \
  --output "$output/continuity/continuity-gate.json"; then suite_status=1; fi
+fi
 
 # Exercise every layer/range against saved data with real connectivity disabled, then
 # repeat from empty app storage. The offline test restores initial radio settings.

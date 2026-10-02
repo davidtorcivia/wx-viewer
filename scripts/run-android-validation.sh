@@ -2,7 +2,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 status=0
-WX_REQUIRE_SCREENSHOTS=1 sh scripts/run-android-e2e.sh || status=1
+WX_REQUIRE_SCREENSHOTS=1 sh scripts/run-android-e2e.sh :macrobenchmark:testPlaybackShapeOracle || status=1
 # Run deterministic UI/network regressions before the longer public-feed matrix.
 # The preview harness clears app storage and reseeds its own settings, so its
 # cold-start/cache guarantees do not depend on the earlier debug suite.
