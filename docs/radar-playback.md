@@ -1,7 +1,10 @@
 # Radar interaction and rendering
 
 The radar transport uses a centered vector play/pause control, a full-width
-scrubber, independent speed/range controls, and translucent paper surfaces. The
+scrubber, independent speed/range controls, and 80%-opaque paper surfaces. The
+multiplier glyph is full-size, the legend key shares its compact header with the
+layer selector, and the distance ruler has no background plate. Visual glyphs
+stay small while interactive targets retain at least 48 dp. The
 distance ruler measures two actual projected screen coordinates; its drawn
 length corresponds to its labeled distance. Large system type stacks transport
 status instead of squeezing the timestamp and repositions map chrome using the
@@ -16,12 +19,30 @@ and mount the replacement, not leave a destroyed MapView in the retained host.
 Lifecycle events suspend/resume rendering, preserve the user's play/pause intent,
 and stop snapshot work when the screen is backgrounded.
 
+## Frame continuity and layer order
+
+A requested frame is staged separately from the last painted frame. Its raster
+remains visible at a negligible nonzero opacity so MapLibre loads and parses its
+tiles; hiding it or using zero opacity would disable that work. The prior painted
+weather remains intact until a subsequent native draw and complete source-local
+tile parsing (or native fully-rendered readiness) establish the replacement.
+Downloads alone and elapsed time never count as readiness. The ready raster is
+shown before the previous raster is hidden, with opacity transitions disabled.
+Nowcast images alternate two sources so replacing an image never clears the
+currently painted source while the new bitmap uploads.
+
+Numeric labels use the painted frame's grid and are added above the entire
+basemap. Styles can interleave symbols and later road/bridge lines, so inserting
+weather values before the first symbol allows roads to cross the numbers. A
+native rendered regression checks the glyph and halo over such a late road.
+
 ## Playback is not a global map-loading lock
 
 MapLibre's fully-rendered callback is useful but can remain incomplete because
 of unrelated base-map tiles or glyph requests. Native raster selections get a
 bounded 1.8-second playback wait, while an unobtrusive buffering indicator stays
-visible until native rendering completes. This callback is advisory, not proof
+visible until native rendering completes. Reaching that limit releases the clock,
+not the painted raster; a superseded pending request cannot remove its fallback. This callback is advisory, not proof
 that one specific selected radar frame was painted. Compositor image tests check
 actual imagery separately from the clock.
 
