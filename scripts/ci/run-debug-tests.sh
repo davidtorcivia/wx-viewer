@@ -49,7 +49,8 @@ if [[ "$mode" == full ]]; then
 fi
 python3 scripts/ci/check-instrumentation.py "$validation_log" "$output/inventory.log" \
   "$output/tests.json" "${check_args[@]}" || result=1
-if [[ "$mode" == full ]] && ! find "app/build/outputs/connected_android_test_additional_output/full" -name '*.png' -type f | grep -q .; then
+# Stop find itself at the first PNG; grep -q can SIGPIPE find under pipefail.
+if [[ "$mode" == full ]] && [[ -z "$(find "app/build/outputs/connected_android_test_additional_output/full" -type f -name '*.png' -print -quit)" ]]; then
   echo 'No device screenshots collected' >&2
   result=1
 fi
