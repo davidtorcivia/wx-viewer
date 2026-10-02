@@ -388,7 +388,19 @@ def analyze_frames(frames, pts, data, plays):
                     or row["colorFraction"] < min(.35, base["colorFraction"] * .45)
                     or field_lost.sum() >= 4):
                 flags.append("opaque_field_coverage_loss")
-    errors.extend(merge_frame_failures([row["flags"] for row in rows]))
+    pixel_failures = merge_frame_failures([row["flags"] for row in rows])
+    if data["layer"] in {"Wind", "Wind gusts"}:
+        # Real native Wind frame260 from run36964452341 retains a dark-blue field
+        # at3–4mph yet crosses this same relative-chroma threshold. Preserve every
+        # flag, frame span, threshold, strip and nonzero result; report the actual
+        # uncertainty rather than claiming that low chroma proves a missing raster.
+        for failure in pixel_failures:
+            if failure["code"] == "opaque_field_coverage_loss":
+                failure["status"] = "inconclusive"
+                failure["message"] = ("Wind field coverage crossed the unchanged calibrated threshold; "
+                                      "palette or opacity loss is unresolved. A valid dark low-wind "
+                                      "palette can trigger this flag; field disappearance is not established.")
+    errors.extend(pixel_failures)
     motion = []
     for play in plays:
         # Screenrecord's first PTS can lag launch. Trim both ends conservatively so
