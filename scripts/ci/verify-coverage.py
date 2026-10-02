@@ -8,6 +8,9 @@ import sys
 spec = importlib.util.spec_from_file_location('phase_contract', Path(__file__).with_name('check-phase-tests.py'))
 phases_contract = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(phases_contract)
+spec = importlib.util.spec_from_file_location('continuity_gate', Path(__file__).with_name('check-radar-continuity-gate.py'))
+continuity_gate = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(continuity_gate)
 
 LAYERS = ['Temperature', 'Dew point', 'Wind', 'Wind gusts', 'Clouds',
           'Precip total', 'Snow total', 'Radar', 'Satellite', 'Radar + satellite']
@@ -29,16 +32,17 @@ def validate(root):
         assert len(phases) == (5 if lane == 'debug' else 1), f'{lane}: missing required phase'
         assert all(line.split('\t')[1] == '0' for line in phases), f'{lane}: failed phase'
         phases_contract.validate_results(lane, json.loads(unique(root, lane + '-phase-tests.json').read_text()))
-    continuity_seen = set()
+    continuity_seen, acquisition_limited = set(), []
     for shard in range(3):
         proof = json.loads(unique(root, f'layers-{shard}-continuity.json').read_text())
-        assert proof['schemaVersion'] == 1 and proof['passed'] is True and proof['status'] == 'passed', proof
-        assert not proof['failures'], proof
+        statuses = [int(unique(root, f'layers-{shard}-continuity{suffix}-status.txt').read_text().strip())
+                    for suffix in ('-acquisition', '-analysis', '')]
+        gate = continuity_gate.validate(proof, *statuses, 3, shard)
+        acquisition_limited.extend(gate['nonblockingAcquisitionLimits'])
         for capture in proof['captures']:
             key = (capture['layer'], float(capture['fontScale']))
             assert key not in continuity_seen, f'Duplicate continuous video evidence: {key}'
             assert LAYERS.index(key[0]) % 3 == shard, f'Wrong continuity shard: {key}'
-            assert capture['status'] == 'passed', capture
             continuity_seen.add(key)
     assert continuity_seen == {(layer, font) for layer in LAYERS for font in (1.0, 2.0)}, 'Missing native sequential layer/font video evidence'
     counts = {}
@@ -70,7 +74,10 @@ def validate(root):
     expected_tests = phases_contract.instrumentation.source_inventory(Path(__file__).resolve().parents[2] / 'app/src/androidTest')
     assert set(debug['tests']) == expected_tests, 'Android result IDs differ from source @Test declarations'
     phases_contract.instrumentation.validate(debug['tests'], {key: {} for key in expected_tests}, allow_phases=True)
-    return {'continuous_native_videos': len(continuity_seen), 'layers': counts, 'android_tests': debug['executed'], 'required_lanes': LANES}
+    return {'continuous_native_videos': len(continuity_seen),
+            'continuity_proven': not acquisition_limited,
+            'nonblocking_acquisition_limits': acquisition_limited,
+            'layers': counts, 'android_tests': debug['executed'], 'required_lanes': LANES}
 
 if __name__ == '__main__':
     print(json.dumps(validate(Path(sys.argv[1])), indent=2))

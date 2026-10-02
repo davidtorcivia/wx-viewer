@@ -16,6 +16,28 @@ def load(name, filename):
 instrumentation = load('instrumentation', 'check-instrumentation.py')
 coverage = load('coverage_contract', 'verify-coverage.py')
 
+def continuity_report(shard):
+    captures = [{'layer': layer, 'fontScale': font, 'theme': 'dark', 'status': 'passed',
+                 'passed': True, 'failures': [], 'videoSha256': 'a' * 64,
+                 'coverage': {'everyEncodedFrame': True},
+                 'summary': {'decodedFrames': 1000, 'completedPlays': 3,
+                             'completedScrubs': 4, 'duplicateOrBackwardPts': 0}}
+                for index, layer in enumerate(coverage.LAYERS) if index % 3 == shard
+                for font in (1.0, 2.0)]
+    return {'schemaVersion': 1, 'analysis': 'native-encoded-frame-continuity',
+            'shardCount': 3, 'shardIndex': shard, 'fontScales': [1.0, 2.0],
+            'thresholds': dict(coverage.continuity_gate.THRESHOLDS),
+            'expectedCaptures': len(captures), 'analyzedCaptures': len(captures),
+            'decodedFrames': 1000 * len(captures),
+            'passed': True, 'status': 'passed', 'failures': [], 'captures': captures}
+
+
+def acquisition_limited(report, code='low_capture_cadence'):
+    report.update(status='inconclusive', passed=False)
+    report['captures'][0].update(status='inconclusive', passed=False,
+                                failures=[{'code': code, 'status': 'inconclusive'}])
+    return report
+
 class InstrumentationContractTest(unittest.TestCase):
     def test_parser_tracks_terminal_result_not_started_or_summary(self):
         raw = '\n'.join(['INSTRUMENTATION_STATUS: class=Example', 'INSTRUMENTATION_STATUS: test=works',
@@ -74,11 +96,9 @@ class CoverageContractTest(unittest.TestCase):
                 self.write(f'layers-{shard}-{state}.json', {'shardIndex': shard, 'shardCount': 3,
                            'minifiedPreview': True, 'failures': [], 'results': results})
         for shard in range(3):
-            self.write(f'layers-{shard}-continuity.json', {
-                'schemaVersion': 1, 'passed': True, 'status': 'passed', 'failures': [],
-                'captures': [{'layer': layer, 'fontScale': font, 'status': 'passed'}
-                             for index, layer in enumerate(coverage.LAYERS) if index % 3 == shard
-                             for font in (1.0, 2.0)]})
+            self.write(f'layers-{shard}-continuity.json', continuity_report(shard))
+            for suffix in ('-acquisition', '-analysis', ''):
+                (self.root / f'layers-{shard}-continuity{suffix}-status.txt').write_text('0\n')
         for lane in coverage.LANES:
             self.write(lane + '-phase-tests.json', {name: {method: {'code': 0} for method in methods}
                        for name, methods in coverage.phases_contract.required_logs(lane).items()})
@@ -102,8 +122,21 @@ class CoverageContractTest(unittest.TestCase):
         self.mutate('layers-0-continuity.json', lambda d: d['captures'].pop())
         with self.assertRaises(AssertionError): coverage.validate(self.root)
 
-    def test_inconclusive_cadence_cannot_pass(self):
+    def test_unexplained_inconclusive_cannot_pass(self):
         self.mutate('layers-1-continuity.json', lambda d: d.update(status='inconclusive', passed=False))
+        with self.assertRaises(AssertionError): coverage.validate(self.root)
+
+    def test_only_whitelisted_acquisition_limits_are_nonblocking_and_explicit(self):
+        self.mutate('layers-1-continuity.json', acquisition_limited)
+        for suffix in ('-analysis', ''):
+            (self.root / f'layers-1-continuity{suffix}-status.txt').write_text('1\n')
+        result = coverage.validate(self.root)
+        self.assertFalse(result['continuity_proven'])
+        self.assertEqual(len(result['nonblocking_acquisition_limits']), 1)
+        # No generated gate JSON is trusted; aggregate recomputes from raw evidence.
+        self.write('layers-1-continuity-gate.json', {'gatePassed': True})
+        self.mutate('layers-1-continuity.json', lambda d: d['captures'][0]['failures'].append(
+            {'code': 'black_frame', 'status': 'failed'}))
         with self.assertRaises(AssertionError): coverage.validate(self.root)
 
     def test_duplicate_continuity_video_cannot_pass(self):

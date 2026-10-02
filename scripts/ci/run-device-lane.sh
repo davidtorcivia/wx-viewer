@@ -36,6 +36,11 @@ case "$lane" in
     run_phase 'Live, saved-offline and empty-offline layer shard' bash scripts/run-radar-layers-preview.sh layers
     output=app/build/outputs/radar-layers-preview
     cp "$output/continuity/continuity-analysis.json" "ci-proof/$lane-continuity.json" || status=1
+    for kind in acquisition analysis ''; do
+      suffix=${kind:+-$kind}
+      cp "$output/continuity/continuity$suffix-status.txt" "ci-proof/$lane-continuity$suffix-status.txt" || status=1
+    done
+    cp "$output/continuity/continuity-gate.json" "ci-proof/$lane-continuity-gate.json" || status=1
     for state in live saved empty; do
       source="$output/radar-layers-proof.json"
       [[ "$state" == live ]] || source="$output/offline-$state/radar-layers-proof.json"

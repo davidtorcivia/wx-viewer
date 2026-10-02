@@ -192,6 +192,45 @@ class PixelFaultInjectionTest(unittest.TestCase):
 
 
 class TimingAndContractTest(unittest.TestCase):
+    def test_valid_painted_play_boundaries_count_with_sparse_interior_observations(self):
+        data = fixture_metadata()
+        data['events'] = [e for e in data['events'] if e['type'] != 'frame_stamp' or e['elapsedMs'] in (1200, 8200)]
+        data['endElapsedRealtimeMs'] += 4500
+        data['events'] += [dict(elapsedMs=14500, type='play_start', stamp='third-start'),
+                           dict(elapsedMs=16000, type='frame_stamp', stamp='third-middle'),
+                           dict(elapsedMs=17500, type='play_end', stamp='third-end')]
+        failures, plays, _ = continuity.validate_events(data)
+        self.assertFalse(failures, failures)
+        self.assertEqual([p['distinctStamps'] for p in plays], [3, 3, 3])
+        self.assertEqual([p['paintedStampSamples'][-1]['type'] for p in plays],
+                         ['scrub_start', 'scrub_start', 'play_end'])
+
+    def test_frozen_and_only_two_painted_times_still_fail_with_boundaries(self):
+        for count in (1, 2):
+            data = fixture_metadata()
+            for event in data['events']:
+                event['stamp'] = 'first' if count == 1 or event['type'] == 'play_start' else 'second'
+            failures, plays, _ = continuity.validate_events(data)
+            self.assertEqual([p['distinctStamps'] for p in plays], [count, count])
+            self.assertEqual(len([f for f in failures if f['code'] == 'play_stamps']), 2)
+
+    def test_post_seek_samples_and_later_play_end_cannot_inflate_play_count(self):
+        data = fixture_metadata()
+        for event in data['events']:
+            if event['type'] == 'play_start': event['stamp'] = 'first'
+            elif event['type'] in ('frame_stamp', 'scrub_start'): event['stamp'] = 'second'
+            else: event['stamp'] = f'post-seek-{event["elapsedMs"]}'
+        for start in (1000, 8000):
+            # Deliberately share the scrub_start time; event order still excludes
+            # a sample recorded after the physical seek begins.
+            index = next(i for i, e in enumerate(data['events']) if e['type'] == 'scrub_start' and e['elapsedMs'] == start + 5000)
+            data['events'].insert(index + 1, dict(elapsedMs=start + 5000, type='frame_stamp', stamp='third-after-seek'))
+            data['events'].insert(index + 3, dict(elapsedMs=start + 5150, type='frame_stamp', stamp='fourth-paused-target'))
+        failures, plays, _ = continuity.validate_events(data)
+        self.assertEqual([p['distinctStamps'] for p in plays], [2, 2])
+        self.assertEqual(len([f for f in failures if f['code'] == 'play_stamps']), 2)
+        self.assertTrue(all(p['paintedStampSamples'][-1]['type'] == 'scrub_start' for p in plays))
+
     def test_real_pts_cadence_and_subframe_precision(self):
         pts = np.arange(420) * 1000 / 30 + 250.125
         summary, failures = continuity.cadence_metrics(pts)
