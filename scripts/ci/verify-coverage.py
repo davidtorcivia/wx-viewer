@@ -29,6 +29,18 @@ def validate(root):
         assert len(phases) == (5 if lane == 'debug' else 1), f'{lane}: missing required phase'
         assert all(line.split('\t')[1] == '0' for line in phases), f'{lane}: failed phase'
         phases_contract.validate_results(lane, json.loads(unique(root, lane + '-phase-tests.json').read_text()))
+    continuity_seen = set()
+    for shard in range(3):
+        proof = json.loads(unique(root, f'layers-{shard}-continuity.json').read_text())
+        assert proof['schemaVersion'] == 1 and proof['passed'] is True and proof['status'] == 'passed', proof
+        assert not proof['failures'], proof
+        for capture in proof['captures']:
+            key = (capture['layer'], float(capture['fontScale']))
+            assert key not in continuity_seen, f'Duplicate continuous video evidence: {key}'
+            assert LAYERS.index(key[0]) % 3 == shard, f'Wrong continuity shard: {key}'
+            assert capture['status'] == 'passed', capture
+            continuity_seen.add(key)
+    assert continuity_seen == {(layer, font) for layer in LAYERS for font in (1.0, 2.0)}, 'Missing native sequential layer/font video evidence'
     counts = {}
     for state in ('live', 'saved', 'empty'):
         seen, stress = set(), 0
@@ -58,7 +70,7 @@ def validate(root):
     expected_tests = phases_contract.instrumentation.source_inventory(Path(__file__).resolve().parents[2] / 'app/src/androidTest')
     assert set(debug['tests']) == expected_tests, 'Android result IDs differ from source @Test declarations'
     phases_contract.instrumentation.validate(debug['tests'], {key: {} for key in expected_tests}, allow_phases=True)
-    return {'layers': counts, 'android_tests': debug['executed'], 'required_lanes': LANES}
+    return {'continuous_native_videos': len(continuity_seen), 'layers': counts, 'android_tests': debug['executed'], 'required_lanes': LANES}
 
 if __name__ == '__main__':
     print(json.dumps(validate(Path(sys.argv[1])), indent=2))

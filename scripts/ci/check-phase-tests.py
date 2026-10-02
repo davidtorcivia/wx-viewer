@@ -29,6 +29,7 @@ def required_logs(lane):
             'radar-layers-preview/instrumentation.log': [M + 'RadarLayersPreviewTest#allLiveLayersRangesInteractionsAndLifecycle'],
             'radar-layers-preview/offline-saved.log': [M + 'RadarLayersPreviewTest#allLayersRemainResponsiveOffline'],
             'radar-layers-preview/offline-empty.log': [M + 'RadarLayersPreviewTest#allLayersRemainResponsiveOffline'],
+            **{f'radar-layers-preview/continuity/font-{font}/instrumentation.log': [M + 'RadarLayersPreviewTest#allLayersContinuousNativeFrames'] for font in ('1.0', '2.0')},
         }
     raise ValueError(lane)
 

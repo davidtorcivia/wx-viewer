@@ -73,6 +73,12 @@ class CoverageContractTest(unittest.TestCase):
                     results.append({'rapidSwitches': 20, 'coldRestart': True, 'result': 'passed'})
                 self.write(f'layers-{shard}-{state}.json', {'shardIndex': shard, 'shardCount': 3,
                            'minifiedPreview': True, 'failures': [], 'results': results})
+        for shard in range(3):
+            self.write(f'layers-{shard}-continuity.json', {
+                'schemaVersion': 1, 'passed': True, 'status': 'passed', 'failures': [],
+                'captures': [{'layer': layer, 'fontScale': font, 'status': 'passed'}
+                             for index, layer in enumerate(coverage.LAYERS) if index % 3 == shard
+                             for font in (1.0, 2.0)]})
         for lane in coverage.LANES:
             self.write(lane + '-phase-tests.json', {name: {method: {'code': 0} for method in methods}
                        for name, methods in coverage.phases_contract.required_logs(lane).items()})
@@ -91,6 +97,18 @@ class CoverageContractTest(unittest.TestCase):
     def test_complete_union(self):
         result = coverage.validate(self.root)
         self.assertEqual(result['layers'], {'live': 28, 'saved': 28, 'empty': 28})
+
+    def test_missing_continuity_video_cannot_pass(self):
+        self.mutate('layers-0-continuity.json', lambda d: d['captures'].pop())
+        with self.assertRaises(AssertionError): coverage.validate(self.root)
+
+    def test_inconclusive_cadence_cannot_pass(self):
+        self.mutate('layers-1-continuity.json', lambda d: d.update(status='inconclusive', passed=False))
+        with self.assertRaises(AssertionError): coverage.validate(self.root)
+
+    def test_duplicate_continuity_video_cannot_pass(self):
+        self.mutate('layers-0-continuity.json', lambda d: d['captures'].append(d['captures'][0]))
+        with self.assertRaises(AssertionError): coverage.validate(self.root)
 
     def test_special_phase_skip_cannot_pass(self):
         self.mutate('playback-phase-tests.json', lambda d: next(iter(next(iter(d.values())).values())).update(code=-4))

@@ -35,6 +35,7 @@ case "$lane" in
     export WX_LAYER_SHARD_COUNT=3 WX_LAYER_SHARD_INDEX=${lane#layers-}
     run_phase 'Live, saved-offline and empty-offline layer shard' bash scripts/run-radar-layers-preview.sh layers
     output=app/build/outputs/radar-layers-preview
+    cp "$output/continuity/continuity-analysis.json" "ci-proof/$lane-continuity.json" || status=1
     for state in live saved empty; do
       source="$output/radar-layers-proof.json"
       [[ "$state" == live ]] || source="$output/offline-$state/radar-layers-proof.json"
