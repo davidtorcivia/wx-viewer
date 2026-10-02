@@ -41,6 +41,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -401,14 +402,15 @@ fun CompactRadarPanel(
     modifier: Modifier = Modifier,
     timeZone: String = ZoneId.systemDefault().id,
 ) {
-    val textExpansion = (LocalDensity.current.fontScale - 1f).coerceAtLeast(0f)
+    var panelHeight by remember(LocalDensity.current.fontScale) { mutableStateOf(260.dp) }
     RadarView(
         serverUrl,
         place,
         true,
-        modifier = modifier.fillMaxWidth().height(260.dp + 120.dp * textExpansion).clip(RoundedCornerShape(8.dp)),
+        modifier = modifier.fillMaxWidth().height(panelHeight).clip(RoundedCornerShape(8.dp)),
         onExpand = onExpand,
         timeZone = timeZone,
+        onCompactHeight = { panelHeight = it.coerceAtLeast(260.dp) },
     )
 }
 
@@ -423,6 +425,7 @@ private fun RadarView(
     onExpand: () -> Unit = {},
     onLocate: () -> Unit = {},
     timeZone: String,
+    onCompactHeight: (Dp) -> Unit = {},
 ) {
     val context = LocalContext.current
     val session =
@@ -641,6 +644,12 @@ private fun RadarView(
     var transportHeight by remember(compact) { mutableStateOf(if (compact) 48.dp else 113.dp) }
     var compactTopHeight by remember(density.fontScale) { mutableStateOf(56.dp) }
     var compactBottomHeight by remember(density.fontScale) { mutableStateOf(112.dp) }
+    var compactErrorHeight by remember(density.fontScale) { mutableStateOf(0.dp) }
+    val visibleProblem = if (session.showingSavedView) null else mapError ?: error
+    LaunchedEffect(compact, compactTopHeight, compactBottomHeight, compactErrorHeight, visibleProblem) {
+        if (compact) onCompactHeight(compactTopHeight + compactBottomHeight +
+            if (visibleProblem != null) compactErrorHeight + 16.dp else 80.dp)
+    }
     fun changeOverlay(layer: String) {
         session.noteTimelineCommand()
         linkPending = null
@@ -713,6 +722,7 @@ private fun RadarView(
                     Text(
                         "Saved ${radarClock(saved.savedAt / 1000, timeZone, true)} · Last viewed area",
                         fontSize = if (compact) 10.sp else 12.sp,
+                        lineHeight = 14.sp, color = ink,
                         modifier =
                             Modifier.align(Alignment.TopCenter)
                                 .onSizeChanged { compactTopHeight = with(density) { it.height.toDp() }.coerceAtLeast(56.dp) }
@@ -729,6 +739,7 @@ private fun RadarView(
                 Text(
                     status,
                     fontSize = if (compact) 10.sp else 12.sp,
+                    lineHeight = 14.sp, color = ink,
                     modifier =
                         Modifier.align(Alignment.TopCenter)
                             .onSizeChanged { compactTopHeight = with(density) { it.height.toDp() }.coerceAtLeast(56.dp) }
@@ -790,6 +801,7 @@ private fun RadarView(
                     Text(
                         status,
                         fontSize = 12.sp,
+                        lineHeight = 16.sp, color = ink,
                         modifier =
                             Modifier.background(paper.copy(alpha = .91f), RoundedCornerShape(8.dp))
                                 .padding(8.dp, 5.dp)
@@ -816,6 +828,7 @@ private fun RadarView(
                     .onSizeChanged { compactBottomHeight = with(density) { it.height.toDp() } }
                     .padding(start = 8.dp, end = 8.dp, bottom = transportHeight + 16.dp)
                     .fillMaxWidth().testTag("radar_compact_legend"),
+                showScale = visibleProblem == null,
             )
         val stamp = session.savedView?.takeIf { session.showingSavedView }
             ?.let { radarClock(it.frameTime, timeZone, true) }
@@ -877,7 +890,7 @@ private fun RadarView(
                 modifier = Modifier.offset(x.dp, y.dp),
             )
         }
-        (if (session.showingSavedView) null else mapError ?: error)?.let { problem ->
+        visibleProblem?.let { problem ->
             // The compact map has controls at both ends. Center an error in the
             // remaining map area, rather than placing it over the lower legend.
             Box(
@@ -887,14 +900,17 @@ private fun RadarView(
                 contentAlignment = Alignment.Center,
             ) {
                 Row(
-                    Modifier.background(paper.copy(alpha = .94f), RoundedCornerShape(14.dp))
+                    Modifier.then(if (compact) Modifier.wrapContentHeight(unbounded = true)
+                        .onSizeChanged { compactErrorHeight = with(density) { it.height.toDp() } } else Modifier)
+                        .background(paper.copy(alpha = .94f), RoundedCornerShape(14.dp))
                         .testTag("radar_error").padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(problem, color = ink, fontSize = 12.sp, modifier = Modifier.weight(1f, false))
+                    Text(problem, color = ink, fontSize = 12.sp, lineHeight = 16.sp,
+                        modifier = Modifier.weight(1f, false).testTag("radar_error_message"))
                     TextButton(onClick = { session.invalidateMetadata(); refresh++; mapError = null },
                         modifier = Modifier.heightIn(min = 44.dp)) {
-                        Text("Retry", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Retry", fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -954,11 +970,12 @@ internal fun RadarInspectionPopup(
 }
 
 @Composable
-private fun RadarLegend(
+internal fun RadarLegend(
     session: RadarSession,
     compact: Boolean,
     onOverlay: (String) -> Unit,
     modifier: Modifier,
+    showScale: Boolean = true,
 ) {
     var menu by remember { mutableStateOf(false) }
     val paper = MaterialTheme.colorScheme.surface
@@ -990,9 +1007,9 @@ private fun RadarLegend(
                     }
                 }
             }
-            if (compact) Box(Modifier.weight(1f).padding(start = 4.dp, end = 8.dp)) {
+            if (compact && showScale) Box(Modifier.weight(1f).padding(start = 4.dp, end = 8.dp)) {
                 RadarScale(field, session.overlay, false, true)
-            } else {
+            } else if (!compact) {
                 RadarIcon(
                     if (session.legendOpen) Icons.Rounded.KeyboardArrowUp else Icons.Rounded.KeyboardArrowDown,
                     if (session.legendOpen) "Collapse radar legend" else "Expand radar legend",
@@ -1075,8 +1092,10 @@ private fun RadarScale(legend: RadarFieldLegend?, overlay: String, snow: Boolean
                 Text(
                     label,
                     fontSize = if (compact) 9.sp else 11.sp,
+                    lineHeight = if (compact) 12.sp else 14.sp,
+                    maxLines = 1, softWrap = false,
                     color = muted,
-                    modifier = Modifier.width(if (compact) 28.dp else 32.dp),
+                    modifier = Modifier.widthIn(min = if (compact) 28.dp else 32.dp),
                 )
                 Column(Modifier.weight(1f)) {
                     Canvas(

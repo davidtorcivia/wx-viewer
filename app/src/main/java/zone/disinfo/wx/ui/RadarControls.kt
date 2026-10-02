@@ -79,7 +79,8 @@ internal fun RadarTransport(
             verticalAlignment = Alignment.CenterVertically) {
             RadarPlaybackButton(playing, enabled, onPlay)
             Column(Modifier.weight(1f).padding(horizontal = 8.dp)) {
-                Text(stamp, color = ink, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Text(stamp, color = ink, fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold,
+                    maxLines = if (largeType) 2 else 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 RadarScrubber(fraction, enabled, onScrub, compact = true)
             }
             RadarPill(range, "Time range", onRange)
@@ -236,9 +237,10 @@ internal fun RadarLegendTicks(ticks: List<Pair<Float, String>>, compact: Boolean
     Layout(content = {
         ticks.forEach { (_, label) -> Text(label, fontSize = if (compact) 8.sp else 9.sp, lineHeight = if (compact) 10.sp else 12.sp,
             color = muted, maxLines = 1) }
-    }, modifier = Modifier.fillMaxWidth().height(if (compact) 12.dp else 15.dp)) { measurables, constraints ->
+    }, modifier = Modifier.fillMaxWidth().heightIn(min = if (compact) 12.dp else 15.dp)) { measurables, constraints ->
         val labels = measurables.map { it.measure(constraints.copy(minWidth = 0, minHeight = 0)) }
-        layout(constraints.maxWidth, constraints.minHeight) {
+        val height = maxOf(constraints.minHeight, labels.maxOfOrNull { it.height } ?: 0)
+        layout(constraints.maxWidth, height) {
             var previousRight = -1
             labels.forEachIndexed { i, label ->
                 val x = (ticks[i].first * constraints.maxWidth - label.width / 2).toInt()
