@@ -3,7 +3,7 @@
 # then replace it with the exact R8-minified preview (same CI test signing key).
 set -euo pipefail
 mode=${1:-all}
-[[ "$mode" == all || "$mode" == playback || "$mode" == layers ]] || { echo "Unknown radar validation mode: $mode" >&2; exit 2; }
+[[ "$mode" == all || "$mode" == playback || "$mode" == layers || "$mode" == continuity ]] || { echo "Unknown radar validation mode: $mode" >&2; exit 2; }
 shard_count=${WX_LAYER_SHARD_COUNT:-1}
 shard_index=${WX_LAYER_SHARD_INDEX:-0}
 [[ "$shard_count" =~ ^[1-3]$ && "$shard_index" =~ ^[0-2]$ && "$shard_index" -lt "$shard_count" ]] || exit 2
@@ -25,9 +25,11 @@ trap restore_emulator EXIT INT TERM
 # Wind particles intentionally obey Android's animator setting; exercise them enabled.
 adb shell settings put global animator_duration_scale 1
 adb shell setprop log.tag.RadarScreen DEBUG
-output=app/build/outputs/radar-layers-preview
+output=${WX_RADAR_OUTPUT:-app/build/outputs/radar-layers-preview}
+debug_apk=${WX_DEBUG_APK:-app/build/outputs/apk/debug/app-debug.apk}
+preview_apk=${WX_PREVIEW_APK:-app/build/outputs/apk/preview/app-preview.apk}
 mkdir -p "$output"
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb install -r "$debug_apk"
 adb shell am force-stop zone.disinfo.wx
 adb shell pm clear zone.disinfo.wx
 python3 - "$output/settings.xml" <<'PY'
@@ -43,14 +45,14 @@ ET.ElementTree(root).write(sys.argv[1], encoding='unicode', xml_declaration=True
 PY
 adb shell run-as zone.disinfo.wx mkdir -p shared_prefs
 adb shell 'run-as zone.disinfo.wx sh -c "cat > shared_prefs/wx_settings_v1.xml"' < "$output/settings.xml"
-adb install -r app/build/outputs/apk/preview/app-preview.apk
-bash scripts/verify-preview-apk.sh app/build/outputs/apk/preview/app-preview.apk > "$output/apk-verification.txt"
+adb install -r "$preview_apk"
+bash scripts/verify-preview-apk.sh "$preview_apk" > "$output/apk-verification.txt"
 adb install -r -t macrobenchmark/build/outputs/apk/benchmark/macrobenchmark-benchmark.apk
 adb logcat -c
 suite_status=0
 # Run cold observed→forecast playback before the all-layer sweep can warm those assets.
 # Every proof targets the installed preview; the external test APK carries no app fixtures.
-if [[ "$mode" != layers ]]; then
+if [[ "$mode" == all || "$mode" == playback ]]; then
 for method in coldRadarFreshnessAndAvailableForecastPlayback sustainedPlaybackPixelsAndInterruptedFlowsOnMinifiedPreview; do
  remote=/sdcard/Android/media/zone.disinfo.wx.macrobenchmark/radar-playback-$method
  mkdir -p "$output/playback-$method"
@@ -68,6 +70,10 @@ for method in coldRadarFreshnessAndAvailableForecastPlayback sustainedPlaybackPi
 done
 fi
 if [[ "$mode" == playback ]]; then exit "$suite_status"; fi
+if [[ "$mode" == continuity ]]; then
+ bash scripts/run-radar-continuity-preview.sh "$output/continuity"
+ exit $?
+fi
 remote=/sdcard/Android/media/zone.disinfo.wx.macrobenchmark/radar-layers-preview
 set +e
 timeout 900 adb shell am instrument -w -r \
@@ -83,6 +89,10 @@ if [[ $status -ne 0 ]] || ! grep -q 'OK (1 test)' "$output/instrumentation.log";
  grep -A 35 -B 2 -E 'FATAL EXCEPTION|Fatal signal' "$output/logcat.txt" || true
  suite_status=1
 fi
+
+# Continuous native-video proof is additional to every existing live/offline assertion.
+# Keep it inside each independent layer shard; no extra main-CI lane or repeated build.
+if ! bash scripts/run-radar-continuity-preview.sh "$output/continuity"; then suite_status=1; fi
 
 # Exercise every layer/range against saved data with real connectivity disabled, then
 # repeat from empty app storage. The offline test restores initial radio settings.
