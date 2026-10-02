@@ -38,6 +38,15 @@ sources before trimming native memory. Painted pixels stay visible, but their
 sources are retired when next hidden so historical parse events cannot certify an
 evicted tile. An unchanged painted backdrop does not block replacement readiness.
 
+Disk-cache requests at the source's display-cover zoom are real pending work,
+even before their asynchronous cache callback starts parsing. MapLibre 11.8 also
+probes lower parent tiles whose cache misses have no terminal callback; those
+optional probes do not gate replacement. The pinned raster cover rule is
+`round(cameraZoom + log2(512 / sourceTileSize))`, clamped to the source maximum.
+Fresh cache requests invalidate old parsed evidence; warm network-interest
+reannouncements can retain it. At least one cover tile must parse, all required
+requests must finish, and the staged source must draw after its latest parse.
+
 Numeric labels use the painted frame's grid and are added above the entire
 basemap. Styles can interleave symbols and later road/bridge lines, so inserting
 weather values before the first symbol allows roads to cross the numbers. A
