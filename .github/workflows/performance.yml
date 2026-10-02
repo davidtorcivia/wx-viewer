@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: candidate
           ref: ${{ github.sha }}
@@ -24,15 +24,17 @@ jobs:
         env:
           BASELINE_REF: ${{ inputs.baseline_ref }}
         run: '[[ "$BASELINE_REF" =~ ^[0-9a-fA-F]{7,40}$ ]]'
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: baseline
           ref: ${{ inputs.baseline_ref }}
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '17'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-provider: basic
       - name: Apply identical benchmark infrastructure
         run: |
           python3 candidate/scripts/prepare-performance-baseline.py --harness candidate --baseline baseline
@@ -55,7 +57,7 @@ jobs:
           fi
           test -r /dev/kvm && test -w /dev/kvm
       - name: Measure baseline, optimized, baseline repeat
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: 35
           target: default
@@ -73,7 +75,7 @@ jobs:
           fi
       - name: Save benchmark evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: android-performance-summary
           path: |
@@ -83,7 +85,7 @@ jobs:
           if-no-files-found: error
       - name: Save baseline traces
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: android-performance-traces-baseline
           path: |
@@ -92,7 +94,7 @@ jobs:
           if-no-files-found: ignore
       - name: Save optimized traces
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: android-performance-traces-optimized
           path: |
@@ -101,7 +103,7 @@ jobs:
           if-no-files-found: ignore
       - name: Save repeated baseline traces
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: android-performance-traces-baseline-repeat
           path: |
@@ -110,7 +112,7 @@ jobs:
           if-no-files-found: ignore
       - name: Save baseline benchmark APK
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: android-performance-baseline-apk
           path: |
@@ -119,7 +121,7 @@ jobs:
           if-no-files-found: ignore
       - name: Save candidate benchmark APK
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: android-performance-candidate-apk
           path: |
@@ -128,7 +130,7 @@ jobs:
           if-no-files-found: ignore
       - name: Save benchmark test APK
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: android-performance-test-apk
           path: |

@@ -8,36 +8,73 @@ on:
 permissions:
   contents: read
 
+# Stop obsolete commits from consuming runners while newer feedback is waiting.
+concurrency:
+  group: android-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
+    name: build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node 24
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1, Node 24
         with:
           distribution: temurin
+          # AGP 8.10's supported/default JDK; setup-java's version is independent.
           java-version: '17'
-      - uses: gradle/actions/setup-gradle@v4
-      - name: Build and lint
-        run: bash ./gradlew --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest :app:assemblePreview :app:lintDebug
-      - name: Verify release-like preview excludes benchmark fixtures
-        run: bash scripts/verify-preview-apk.sh app/build/outputs/apk/preview/app-preview.apk
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0, Node 24
+        with:
+          cache-provider: basic
+      - name: Validate CI harness contracts
+        run: python3 -m unittest discover -s scripts/ci -p 'test_*.py' -v
+      - name: Build all packages once and lint
+        # These runners have no emulator competing for memory during compilation.
+        # All device jobs consume these same signed bytes, without another Gradle build.
+        run: >-
+          bash ./gradlew --build-cache --parallel --max-workers=4
+          '-Dorg.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8'
+          :app:assembleDebug :app:assembleDebugAndroidTest :app:assemblePreview
+          :macrobenchmark:assembleBenchmark :app:lintDebug
+      - name: Verify preview and record exact package hashes
+        run: |
+          bash scripts/verify-preview-apk.sh app/build/outputs/apk/preview/app-preview.apk
+          sha256sum app/build/outputs/apk/debug/app-debug.apk \
+            app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+            app/build/outputs/apk/preview/app-preview.apk \
+            macrobenchmark/build/outputs/apk/benchmark/macrobenchmark-benchmark.apk > apk-sha256.txt
+      - name: Share the exact packages with every device lane
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-validation-packages
+          compression-level: 0
+          path: |
+            apk-sha256.txt
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            app/build/outputs/apk/preview/app-preview.apk
+            macrobenchmark/build/outputs/apk/benchmark/macrobenchmark-benchmark.apk
+          if-no-files-found: error
       - name: Save debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wx-viewer-debug
+          compression-level: 6
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
       - name: Save CI-only release-like build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          # User delivery uses the locally signed preview; this runner has its own debug key.
+          # User delivery uses the locally signed preview; never deliver the CI key.
           name: wx-viewer-release-like-ci-key
+          compression-level: 6
           path: app/build/outputs/apk/preview/app-preview.apk
           if-no-files-found: error
       - name: Save test and lint reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: android-reports
           path: |
@@ -46,18 +83,28 @@ jobs:
             app/build/outputs/mapping/preview/
           if-no-files-found: ignore
 
-  android-e2e:
+  android-device:
+    name: Device / ${{ matrix.lane }}
+    needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        lane: [debug, playback, layers-0, layers-1, layers-2]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '17'
-      - uses: gradle/actions/setup-gradle@v4
-      - name: Prepare device validation packages
-        run: bash ./gradlew --no-daemon --max-workers=2 :app:assembleDebug :app:assembleDebugAndroidTest :app:assemblePreview :macrobenchmark:assembleBenchmark
+      - name: Download prebuilt packages
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: android-validation-packages
+      - name: Verify these are the same build's exact APKs
+        run: sha256sum --check apk-sha256.txt
       - name: Enable temporary runner KVM access
         shell: bash
         run: |
@@ -69,19 +116,18 @@ jobs:
             sudo setfacl -m "u:$(id -un):rw" /dev/kvm
           fi
           test -r /dev/kvm && test -w /dev/kvm
-      - name: Run Android end-to-end tests
-        uses: reactivecircus/android-emulator-runner@v2
+      - name: Run required device lane
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0, Node 24
         with:
           api-level: 35
           target: default
           arch: x86_64
           profile: pixel_2
-          # Keep CPU/KVM acceleration, but use Mesa software graphics. SwiftShader can
-          # silently drop MapLibre symbol fragments on x86_64 (upstream #4625).
+          # Preserve cold starts and Mesa graphics. SwiftShader loses MapLibre symbols.
           emulator-options: -no-window -gpu lavapipe -no-snapshot -noaudio -no-boot-anim -camera-back none -accel on -no-metrics
           emulator-boot-timeout: 900
           disable-animations: true
-          script: bash ./scripts/run-android-validation.sh
+          script: bash scripts/ci/run-device-lane.sh ${{ matrix.lane }}
       - name: Restore runner KVM permissions
         if: always()
         shell: bash
@@ -89,29 +135,34 @@ jobs:
           if [[ -f "$RUNNER_TEMP/wx-kvm-original.acl" ]]; then
             sudo setfacl --restore="$RUNNER_TEMP/wx-kvm-original.acl"
           fi
-      - name: Save Android end-to-end reports
+      - name: Save small machine-checkable coverage proofs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: android-e2e-reports
+          name: ci-proof-${{ matrix.lane }}
+          path: ci-proof/
+          if-no-files-found: error
+      - name: Save device logs and reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-e2e-reports-${{ matrix.lane }}
           path: |
-            app/build/reports/androidTests/
-            app/build/outputs/androidTest-results/
-            app/build/outputs/connected_android_test_additional_output/
             app/build/outputs/e2e/
+            app/build/outputs/connected_android_test_additional_output/
             !app/build/outputs/connected_android_test_additional_output/**/beauty-*
             !app/build/outputs/e2e/device-beauty/**
           if-no-files-found: ignore
       - name: Save screen beauty captures
-        if: always()
-        uses: actions/upload-artifact@v4
+        if: always() && matrix.lane == 'debug'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: android-screen-beauty
           path: app/build/outputs/connected_android_test_additional_output/**/beauty-*
           if-no-files-found: ignore
       - name: Save real-device large-text captures
-        if: always()
-        uses: actions/upload-artifact@v4
+        if: always() && matrix.lane == 'debug'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: android-device-beauty
           path: |
@@ -120,28 +171,48 @@ jobs:
           if-no-files-found: ignore
       - name: Save minified offline and process-death evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: android-offline-preview-evidence
+          name: android-offline-preview-evidence-${{ matrix.lane }}
           path: |
             app/build/outputs/offline-preview/
             app/build/outputs/radar-offline-phases/
             app/build/outputs/radar-layers-preview/offline-*/
           if-no-files-found: ignore
       - name: Save live radar layer evidence
-        if: always()
-        uses: actions/upload-artifact@v4
+        if: always() && startsWith(matrix.lane, 'layers-')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: android-radar-live-evidence
+          name: android-radar-live-evidence-${{ matrix.lane }}
           path: |
             app/build/outputs/radar-layers-preview/
             !app/build/outputs/radar-layers-preview/offline-*/**
             !app/build/outputs/radar-layers-preview/playback-*/**
           if-no-files-found: ignore
       - name: Save sustained radar playback evidence
-        if: always()
-        uses: actions/upload-artifact@v4
+        if: always() && matrix.lane == 'playback'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: android-radar-playback-evidence
           path: app/build/outputs/radar-layers-preview/playback-*/
           if-no-files-found: ignore
+
+  android-e2e:
+    name: android-e2e
+    if: always()
+    needs: [build, android-device]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every build and device lane
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          DEVICE_RESULT: ${{ needs.android-device.result }}
+        run: test "$BUILD_RESULT" = success && test "$DEVICE_RESULT" = success
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ci-proof-*
+          path: ci-results
+      - name: Require complete Android suite, 28 live and 56 offline cases
+        shell: bash
+        run: python3 scripts/ci/verify-coverage.py ci-results | tee -a "$GITHUB_STEP_SUMMARY"
