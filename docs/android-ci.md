@@ -38,13 +38,31 @@ phase is the fast feedback path; the full acceptance gate remains required on
 every existing push, pull request and manual trigger. The manual performance
 comparison still measures baseline, candidate and baseline repeat in that order.
 
+## Build cache
+
+The Android build restores GitHub Actions cache state using the OS, architecture,
+JDK, build-file fingerprint and source commit. When no exact source entry exists,
+it restores the newest compatible snapshot; Gradle still validates each task's
+inputs before reusing its outputs. Successful default-branch builds save the
+updated state under their own immutable key, so later commits can reuse recently
+compiled outputs instead of repeatedly restoring the first build-file snapshot.
+Pull requests only read these caches. The saved paths are Gradle's `caches` and
+`wrapper` directories, not signing files, credentials or app data.
+
+`setup-gradle` uses `cache-provider: external` to avoid a competing cache writer.
+No additional cache service or credentials are used. The first run seeds this
+cache namespace; measure a later restored build before claiming a warm-cache
+speedup. GitHub's normal cache quota and eviction still apply.
+
 ## Toolchain warnings
 
 All action refs are pinned to verified releases that declare `node24`:
 
 - checkout 7.0.1
 - setup-java 6.0.1
-- Gradle setup 6.4.0, explicitly using its open-source `basic` cache provider
+- Gradle setup 6.4.0, with GitHub-only external caching for Android CI and the
+  open-source `basic` cache provider for manual performance comparisons
+- actions/cache 6.1.0
 - upload-artifact 7.0.1 / download-artifact 8.0.1
 - android-emulator-runner 2.38.0
 
