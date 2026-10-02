@@ -32,6 +32,8 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -416,6 +418,29 @@ fun CompactRadarPanel(
     )
 }
 
+/** Keep map values out of the measured translucent chrome, while leaving map colors visible. */
+@Composable
+private fun Modifier.radarNumberOcclusion(controller: NativeRadarController?, key: String): Modifier =
+    reportRadarControlBounds(controller, key) { id, bounds -> controller?.setNumberControl(id, bounds) }
+
+/** Shared measurement path, including a late native-controller assignment and disposal. */
+@Composable
+internal fun Modifier.reportRadarControlBounds(
+    owner: Any?, key: String, onBounds: (String, RadarLabelRect?) -> Unit,
+): Modifier {
+    var measured by remember { mutableStateOf<RadarLabelRect?>(null) }
+    // The MapView controller can arrive after the first layout. Retain that measurement
+    // across controller assignment; a callback update alone need not trigger a new layout.
+    SideEffect { onBounds(key, measured) }
+    DisposableEffect(owner, key) {
+        onDispose { onBounds(key, null) }
+    }
+    return onGloballyPositioned { coordinates ->
+        val bounds = coordinates.boundsInWindow()
+        measured = RadarLabelRect(bounds.left, bounds.top, bounds.right, bounds.bottom)
+    }
+}
+
 @Composable
 private fun RadarView(
     serverUrl: String,
@@ -773,14 +798,14 @@ private fun RadarView(
                             false,
                             { changeOverlay(it) },
                             (if (session.legendOpen) Modifier.width(if (density.fontScale > 1.25f) 224.dp else 204.dp) else Modifier.wrapContentWidth())
-                                .testTag("radar_legend"),
+                                .radarNumberOcclusion(controller, "legend").testTag("radar_legend"),
                         )
                     }
                     RadarIcon(
                         Icons.Rounded.MyLocation,
                         "Find my location",
                         onLocate,
-                        Modifier.radarSurface(CircleShape).testTag("radar_map_controls"),
+                        Modifier.radarSurface(CircleShape).radarNumberOcclusion(controller, "location").testTag("radar_map_controls"),
                     )
                 }
                 val saved = session.savedView?.takeIf { session.showingSavedView }
@@ -814,27 +839,20 @@ private fun RadarView(
                     )
             }
         }
-        if (compact)
-            RadarIcon(
-                Icons.Rounded.OpenInFull,
-                "Open the radar full screen",
-                onExpand,
-                Modifier.align(Alignment.TopEnd)
-                    .padding(8.dp)
-                    .radarSurface(CircleShape),
-                ink,
-            )
-        if (compact)
-            RadarLegend(
-                session,
-                true,
-                { changeOverlay(it) },
-                Modifier.align(Alignment.BottomCenter)
-                    .onSizeChanged { compactBottomHeight = with(density) { it.height.toDp() } }
-                    .padding(start = 8.dp, end = 8.dp, bottom = transportHeight + 16.dp)
-                    .fillMaxWidth().testTag("radar_compact_legend"),
-                showScale = visibleProblem == null,
-            )
+        if (compact) {
+            Box(Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                RadarIcon(Icons.Rounded.OpenInFull, "Open the radar full screen", onExpand,
+                    Modifier.radarSurface(CircleShape).radarNumberOcclusion(controller, "expand"), ink)
+            }
+            Box(Modifier.align(Alignment.BottomCenter)
+                .onSizeChanged { compactBottomHeight = with(density) { it.height.toDp() } }
+                .padding(start = 8.dp, end = 8.dp, bottom = transportHeight + 16.dp).fillMaxWidth()) {
+                RadarLegend(session, true, { changeOverlay(it) },
+                    Modifier.fillMaxWidth().radarNumberOcclusion(controller, "legend")
+                        .testTag("radar_compact_legend"),
+                    showScale = visibleProblem == null)
+            }
+        }
         val stamp = session.savedView?.takeIf { session.showingSavedView }
             ?.let { radarClock(it.frameTime, timeZone, true) }
             ?: displayedFrame?.let { radarClock(it.time, timeZone, it.field != null) }
@@ -847,32 +865,36 @@ private fun RadarView(
             displayedFrame.field != null -> if (displayedFrame.source == "rtma") "OBSERVED" else "+${displayedFrame.forecastHour}h"
             else -> "OBSERVED"
         }
-        RadarTransport(
-            playing = session.playing,
-            enabled = frames.size > 1 && !session.showingSavedView && network != NetworkAvailability.OFFLINE,
-            compact = compact,
-            stamp = stamp,
-            badge = badge,
-            loading = tileLoading && !session.showingSavedView && network != NetworkAvailability.OFFLINE,
-            speed = listOf("1×", "½×", "¼×")[session.speed],
-            range = radarRanges.first { it.first == session.effectiveRange }.second,
-            fraction = sliderFraction,
-            onPlay = { session.setPlayingIntent(!session.playing) },
-            onSpeed = { session.noteCommand(); session.speed = (session.speed + 1) % 3; session.save() },
-            onRange = { nextRange() },
-            onScrub = { scrub(it) },
-            modifier = Modifier.align(Alignment.BottomCenter)
-                .padding(if (compact) 8.dp else 12.dp).fillMaxWidth()
-                .onSizeChanged { size ->
-                    transportHeight = with(density) { size.height.toDp() }
-                    if (!compact) controller?.setControlInset(size.height + (20 * density.density).roundToInt())
-                },
-        )
-        if (!compact && session.scale.isNotBlank())
-            RadarDistanceScale(
-                session.scale, session.scaleWidth,
-                Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = transportHeight + 24.dp),
+        Box(Modifier.align(Alignment.BottomCenter)
+            .padding(if (compact) 8.dp else 12.dp).fillMaxWidth()) {
+            RadarTransport(
+                playing = session.playing,
+                enabled = frames.size > 1 && !session.showingSavedView && network != NetworkAvailability.OFFLINE,
+                compact = compact,
+                stamp = stamp,
+                badge = badge,
+                loading = tileLoading && !session.showingSavedView && network != NetworkAvailability.OFFLINE,
+                speed = listOf("1×", "½×", "¼×")[session.speed],
+                range = radarRanges.first { it.first == session.effectiveRange }.second,
+                fraction = sliderFraction,
+                onPlay = { session.setPlayingIntent(!session.playing) },
+                onSpeed = { session.noteCommand(); session.speed = (session.speed + 1) % 3; session.save() },
+                onRange = { nextRange() },
+                onScrub = { scrub(it) },
+                modifier = Modifier.fillMaxWidth()
+                    .radarNumberOcclusion(controller, "transport")
+                    .onSizeChanged { size ->
+                        transportHeight = with(density) { size.height.toDp() }
+                        if (!compact) controller?.setControlInset(size.height + (20 * density.density).roundToInt())
+                    },
             )
+        }
+        if (!compact && session.scale.isNotBlank()) {
+            Box(Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = transportHeight + 24.dp)) {
+                RadarDistanceScale(session.scale, session.scaleWidth,
+                    Modifier.radarNumberOcclusion(controller, "scale"))
+            }
+        }
 
         val inspection = session.inspection
         if (inspection != null) {
@@ -1545,6 +1567,13 @@ private class NativeRadarController(
     }
     private var numbersJob: Job? = null
     private var numbersRequest = 0
+    private var numberLabels = emptyList<RadarNumberLabel>()
+    private val numberControls = linkedMapOf<String, RadarLabelRect>()
+    private var lastVisibleNumberLabels: List<RadarNumberLabel>? = null
+    private val cameraMove = MapLibreMap.OnCameraMoveListener {
+        // Reproject existing values during the gesture; refresh grid/town candidates at idle.
+        if (!disposed) style?.let { renderNumbers(it) }
+    }
     private var alertJob: Job? = null
     private var alertRequestJob: Job? = null
     private var alertsCenter: LatLng? = null
@@ -1637,6 +1666,7 @@ private class NativeRadarController(
                         controlInset,
                     )
                 ready.addOnCameraIdleListener(cameraIdle)
+                ready.addOnCameraMoveListener(cameraMove)
                 ready.addOnCameraMoveStartedListener {
                     cameraMoving = true
                     retireOnHide.addAll(paintedLayers.filter { it in cached })
@@ -1776,6 +1806,12 @@ private class NativeRadarController(
                 }
             }
         }
+    }
+
+    fun setNumberControl(key: String, bounds: RadarLabelRect?) {
+        if (disposed || numberControls[key] == bounds) return
+        if (bounds == null) numberControls.remove(key) else numberControls[key] = bounds
+        style?.let { renderNumbers(it) }
     }
 
     fun setControlInset(bottom: Int) {
@@ -2533,6 +2569,8 @@ private class NativeRadarController(
     }
 
     private fun clearNumbers() {
+        numberLabels = emptyList()
+        lastVisibleNumberLabels = null
         runCatching {
             style?.getSourceAs<GeoJsonSource>("wx-numbers")
                 ?.setGeoJson("{\"type\":\"FeatureCollection\",\"features\":[]}")
@@ -2547,11 +2585,10 @@ private class NativeRadarController(
         val values = grid
         updateWindParticles(values)
         if (values == null) {
-            s.getSourceAs<GeoJsonSource>("wx-numbers")
-                ?.setGeoJson("{\"type\":\"FeatureCollection\",\"features\":[]}")
+            clearNumbers()
             return
         }
-        // MapLibre queries stay on its UI thread. Grid scans, formatting, and JSON creation
+        // MapLibre queries/projection stay on its UI thread. Grid scans and formatting
         // use a snapshot of the viewport and run off the main thread.
         val places =
             s.layers
@@ -2592,22 +2629,12 @@ private class NativeRadarController(
         val step = 2.0.pow(round(log2(240 / pxPerDegree)))
         numbersJob = scope.launch {
             try {
-            val json =
+            val labels =
                 withContext(Dispatchers.Default) {
-                    val features = JSONArray()
+                    val labels = mutableListOf<RadarNumberLabel>()
                     fun add(lon: Double, lat: Double, rank: Int) {
                         val label = values.label(lon, lat) ?: return
-                        features.put(
-                            JSONObject()
-                                .put("type", "Feature")
-                                .put(
-                                    "geometry",
-                                    JSONObject()
-                                        .put("type", "Point")
-                                        .put("coordinates", JSONArray().put(lon).put(lat)),
-                                )
-                                .put("properties", JSONObject().put("t", label).put("rank", rank))
-                        )
+                        labels.add(RadarNumberLabel(lon, lat, rank, label))
                     }
                     towns.forEach { (lon, lat, rank) -> add(lon, lat, rank) }
                     var latitude = floor(south / step) * step
@@ -2624,13 +2651,11 @@ private class NativeRadarController(
                         }
                         latitude += step
                     }
-                    JSONObject()
-                        .put("type", "FeatureCollection")
-                        .put("features", features)
-                        .toString()
+                    labels.toList()
                 }
             if (!disposed && style === s && grid === values && request == numbersRequest) {
-                applyNumbers(s, json)
+                numberLabels = labels
+                renderNumbers(s)
             }
             } catch (e: CancellationException) {
                 throw e
@@ -2640,6 +2665,41 @@ private class NativeRadarController(
                 if (!disposed && style === s && request == numbersRequest) clearNumbers()
             }
         }
+    }
+
+    private fun renderNumbers(s: Style) {
+        try {
+            renderNumbersSafely(s)
+        } catch (e: Exception) {
+            Log.w(RADAR_LOG_TAG, "Weather labels unavailable during layout/camera update", e)
+            clearNumbers()
+        }
+    }
+
+    private fun renderNumbersSafely(s: Style) {
+        val ready = map ?: return
+        if (numberLabels.isEmpty() && s.getSource("wx-numbers") == null) return
+        val origin = IntArray(2).also(view::getLocationInWindow)
+        val controls = numberControls.values.map {
+            RadarLabelRect(it.left - origin[0], it.top - origin[1], it.right - origin[0], it.bottom - origin[1])
+        }
+        val density = view.resources.displayMetrics.density
+        val visible = numberLabels.filter { label ->
+            val point = ready.projection.toScreenLocation(LatLng(label.latitude, label.longitude))
+            !radarNumberOverlapsControls(point.x, point.y, label.text, label.rank, density, controls)
+        }
+        // Most gesture callbacks keep the same set. Avoid JSON/native source work then.
+        if (visible == lastVisibleNumberLabels && s.getSource("wx-numbers") != null) return
+        lastVisibleNumberLabels = visible
+        val features = JSONArray()
+        for (label in visible) {
+            features.put(JSONObject().put("type", "Feature")
+                .put("geometry", JSONObject().put("type", "Point")
+                    .put("coordinates", JSONArray().put(label.longitude).put(label.latitude)))
+                .put("properties", JSONObject().put("t", label.text).put("rank", label.rank)))
+        }
+        val json = JSONObject().put("type", "FeatureCollection").put("features", features).toString()
+        applyNumbers(s, json)
     }
 
     private fun applyNumbers(s: Style, json: String) {
@@ -2730,6 +2790,7 @@ private class NativeRadarController(
         scope.cancel()
         nowcast.clear()
         map?.removeOnCameraIdleListener(cameraIdle)
+        map?.removeOnCameraMoveListener(cameraMove)
         view.removeOnTileActionListener(tileAction)
         view.removeOnDidFailLoadingMapListener(failed)
         view.removeOnDidFinishRenderingFrameListener(rendered)
