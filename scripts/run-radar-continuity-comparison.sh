@@ -25,7 +25,7 @@ if [[ "${WX_LAYER_SHARD_INDEX:-0}" == 0 ]]; then
   adb logcat -c
   timeout 180 adb shell am instrument -w -r \
    -e class zone.disinfo.wx.ui.RadarRasterContinuityTest#cloudsRetainWeatherThroughDelayedFailedAndStaleTiles \
-   -e additionalTestOutputDir "$remote" \
+   -e wxPixelNegativeControl true -e additionalTestOutputDir "$remote" \
    zone.disinfo.wx.test/androidx.test.runner.AndroidJUnitRunner 2>&1 | tee "$negative/instrumentation.log"
   printf '%s\n' "${PIPESTATUS[0]}" > "$negative/command-status.txt"
   adb pull "$remote/." "$negative/" || true
@@ -53,27 +53,6 @@ for leg in baseline candidate; do
  sha256sum "$checkout/app/build/outputs/apk/preview/app-preview.apk" \
   "$candidate/macrobenchmark/build/outputs/apk/benchmark/macrobenchmark-benchmark.apk" > "$output/$leg/apk-sha256.txt"
 done
-python3 - "$output" "${WX_LAYER_SHARD_COUNT:-1}" "${WX_LAYER_SHARD_INDEX:-0}" <<'PY' || status=1
-import json, pathlib, sys
-root = pathlib.Path(sys.argv[1]); count, shard = map(int, sys.argv[2:])
-expected = 2 * sum(i % count == shard for i in range(10))
-result = {'baselineCommit': '0b69bee21196178bb92f91fc8b00495fb263713e',
-          'baselineFailuresAreExpectedRegressionEvidence': True,
-          'commonHarness': True, 'sameEmulator': True, 'legs': {}}
-if shard == 0:
-    result['controlledBaselineNegativeProof'] = json.loads((root / 'baseline-negative-control/negative-control-proof.json').read_text())
-for leg in ('baseline', 'candidate'):
-    report = json.loads((root / leg / 'continuity/continuity-analysis.json').read_text())
-    result['legs'][leg] = report
-(root / 'comparison.json').write_text(json.dumps(result, indent=2))
-# Known baseline rendering failures do not excuse absent/truncated/low-cadence evidence.
-baseline = result['legs']['baseline']
-assert len(baseline['captures']) == expected and not baseline['failures'], 'Incomplete/duplicate baseline video set'
-visual_regressions = {'black_native_view', 'flat_native_view', 'partial_black_native_view',
-                      'map_detail_loss', 'opaque_field_coverage_loss', 'frozen_native_playback'}
-for capture in baseline['captures']:
-    assert all(f.get('status') != 'inconclusive' and f.get('code') in visual_regressions
-               for f in capture.get('failures', [])), 'Baseline acquisition/action evidence incomplete or inconclusive'
-assert result['legs']['candidate']['passed'] is True, 'Candidate native continuity failed'
-PY
+python3 scripts/ci/summarize-radar-comparison.py "$output" \
+ "${WX_LAYER_SHARD_COUNT:-1}" "${WX_LAYER_SHARD_INDEX:-0}" || status=1
 exit "$status"
