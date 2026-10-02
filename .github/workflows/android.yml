@@ -212,7 +212,24 @@ jobs:
             app/build/outputs/radar-layers-preview/
             !app/build/outputs/radar-layers-preview/offline-*/**
             !app/build/outputs/radar-layers-preview/playback-*/**
+            !app/build/outputs/radar-layers-preview/**/*.mp4
           if-no-files-found: ignore
+      - name: Save normal-text sequential native radar videos
+        if: always() && startsWith(matrix.lane, 'layers-')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-normal-${{ matrix.lane }}
+          compression-level: 0
+          path: app/build/outputs/radar-layers-preview/continuity/font-1.0/*.mp4
+          if-no-files-found: error
+      - name: Save large-text sequential native radar videos
+        if: always() && startsWith(matrix.lane, 'layers-')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: android-radar-video-large-${{ matrix.lane }}
+          compression-level: 0
+          path: app/build/outputs/radar-layers-preview/continuity/font-2.0/*.mp4
+          if-no-files-found: error
       - name: Save sustained radar playback evidence
         if: always() && matrix.lane == 'playback'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

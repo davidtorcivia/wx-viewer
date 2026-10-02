@@ -1,0 +1,146 @@
+name: Native radar continuity comparison
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: candidate
+          ref: ${{ github.sha }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: baseline
+          ref: 0b69bee21196178bb92f91fc8b00495fb263713e
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6
+        with:
+          cache-provider: basic
+      - name: Build unchanged baseline and candidate with one external harness
+        run: |
+          (cd baseline && bash ./gradlew --build-cache --max-workers=2 :app:assembleDebug :app:assemblePreview)
+          (cd candidate && bash ./gradlew --build-cache --max-workers=2 :app:assembleDebug :app:assembleDebugAndroidTest :app:assemblePreview :macrobenchmark:assembleBenchmark)
+          git -C baseline diff --exit-code
+          mkdir -p continuity-build
+          git -C baseline rev-parse HEAD > continuity-build/baseline-commit.txt
+          git -C candidate rev-parse HEAD > continuity-build/candidate-commit.txt
+          sha256sum baseline/app/build/outputs/apk/{debug/app-debug,preview/app-preview}.apk \
+            candidate/app/build/outputs/apk/{debug/app-debug,preview/app-preview}.apk \
+            candidate/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+            candidate/macrobenchmark/build/outputs/apk/benchmark/macrobenchmark-benchmark.apk > continuity-build/apk-sha256.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-comparison-packages
+          compression-level: 0
+          path: |
+            continuity-build/
+            baseline/app/build/outputs/apk/debug/app-debug.apk
+            baseline/app/build/outputs/apk/preview/app-preview.apk
+            candidate/app/build/outputs/apk/debug/app-debug.apk
+            candidate/app/build/outputs/apk/preview/app-preview.apk
+            candidate/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            candidate/macrobenchmark/build/outputs/apk/benchmark/macrobenchmark-benchmark.apk
+          if-no-files-found: error
+  compare:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: candidate
+          ref: ${{ github.sha }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: baseline
+          ref: 0b69bee21196178bb92f91fc8b00495fb263713e
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: native-radar-comparison-packages
+      - name: Verify exact package bytes
+        run: sha256sum --check continuity-build/apk-sha256.txt
+      - name: Enable temporary runner KVM access
+        run: |
+          test -c /dev/kvm || exit 1
+          if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+            getfacl --absolute-names /dev/kvm > "$RUNNER_TEMP/wx-kvm-original.acl"
+            sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+          fi
+          test -r /dev/kvm && test -w /dev/kvm
+      - name: Capture every layer at normal and 200-percent text
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        env:
+          WX_LAYER_SHARD_COUNT: '3'
+          WX_LAYER_SHARD_INDEX: ${{ matrix.shard }}
+        with:
+          api-level: 35
+          target: default
+          arch: x86_64
+          profile: pixel_2
+          emulator-options: -no-window -gpu lavapipe -no-snapshot -noaudio -no-boot-anim -camera-back none -accel on -no-metrics
+          emulator-boot-timeout: 900
+          disable-animations: true
+          script: bash candidate/scripts/run-radar-continuity-comparison.sh baseline candidate continuity-results
+      - name: Restore runner KVM permissions
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/wx-kvm-original.acl" ]]; then
+            sudo setfacl --restore="$RUNNER_TEMP/wx-kvm-original.acl"
+          fi
+      - name: Save native videos, every-frame analysis and failures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-comparison-shard-${{ matrix.shard }}
+          compression-level: 1
+          path: |
+            continuity-results/
+            !continuity-results/**/*.mp4
+            continuity-build/
+          if-no-files-found: error
+      - name: Save baseline normal-text native video
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-normal-shard-${{ matrix.shard }}
+          compression-level: 0
+          path: continuity-results/baseline/continuity/font-1.0/*.mp4
+          if-no-files-found: error
+      - name: Save baseline large-text native video
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-baseline-large-shard-${{ matrix.shard }}
+          compression-level: 0
+          path: continuity-results/baseline/continuity/font-2.0/*.mp4
+          if-no-files-found: error
+      - name: Save candidate normal-text native video
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-normal-shard-${{ matrix.shard }}
+          compression-level: 0
+          path: continuity-results/candidate/continuity/font-1.0/*.mp4
+          if-no-files-found: error
+      - name: Save candidate large-text native video
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: native-radar-candidate-large-shard-${{ matrix.shard }}
+          compression-level: 0
+          path: continuity-results/candidate/continuity/font-2.0/*.mp4
+          if-no-files-found: error
