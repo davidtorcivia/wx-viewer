@@ -38,6 +38,18 @@ sources before trimming native memory. Painted pixels stay visible, but their
 sources are retired when next hidden so historical parse events cannot certify an
 evicted tile. An unchanged painted backdrop does not block replacement readiness.
 
+Retiring a raster also retires its native layer/source identity. Recreating the
+same frame allocates a fresh instance ID, while a genuinely cached frame keeps
+its existing peers and HTTP URLs remain unchanged. MapLibre coalesces queued
+render updates and diffs sources by ID/type: same-ID removal and recreation can
+otherwise preserve decoded tiles without new parsing callbacks, leaving a newly
+reset readiness ledger waiting forever. Fresh IDs also isolate queued callbacks
+from retired source generations. This follows MapLibre11.8’s
+[source diff](https://github.com/maplibre/maplibre-native/blob/android-v11.8.0/src/mbgl/renderer/style_diff.cpp)
+and [tileset update](https://github.com/maplibre/maplibre-native/blob/android-v11.8.0/src/mbgl/renderer/sources/render_tile_source.cpp)
+behavior. The native fixture exercises repeated empty
+and same-frame restoration within one UI turn, without a renderer fence.
+
 Disk-cache requests at the source's display-cover zoom are real pending work,
 even before their asynchronous cache callback starts parsing. MapLibre 11.8 also
 probes lower parent tiles whose cache misses have no terminal callback; those
@@ -51,6 +63,12 @@ Numeric labels use the painted frame's grid and are added above the entire
 basemap. Styles can interleave symbols and later road/bridge lines, so inserting
 weather values before the first symbol allows roads to cross the numbers. A
 native rendered regression checks the glyph and halo over such a late road.
+Measured control rectangles exclude weather-number envelopes from translucent
+chrome, without obscuring the raster itself. Layout callbacks deliver bounds
+immediately; retained bounds also bind to controllers arriving after layout.
+Camera moves reproject existing labels, and unchanged membership avoids JSON or
+native-source writes. Native glyph pixels and production Compose lifecycle tests
+cover resizing, large type, panning, replacement, and disposal.
 
 ## Playback is not a global map-loading lock
 
