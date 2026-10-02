@@ -1589,8 +1589,13 @@ private class NativeRadarController(
     }
     private val tileAction = MapView.OnTileActionListener { operation, x, y, z, wrap, overscaledZ, sourceId ->
         if (!disposed && sourceId.startsWith("wx-")) {
-            tileReadiness.record(sourceId, "$z/$x/$y/$wrap/$overscaledZ", operation)
+            tileReadiness.record(sourceId, "$z/$x/$y/$wrap/$overscaledZ", operation, z)
             if (pendingLayers?.keys?.any { "$it-source" == sourceId } == true) {
+                if (operation == org.maplibre.android.tile.TileOperation.EndParse) {
+                    // CPU parsing is not a GPU upload fence. Draw the staged source
+                    // after its newest parse before making it the painted replacement.
+                    pendingAfterSerial = renderedSerial + 1
+                }
                 readinessJob?.cancel()
                 readinessJob = scope.launch {
                     delay(100)
@@ -1878,6 +1883,8 @@ private class NativeRadarController(
             for (frame in visible) {
                 val id = "wx-${frame.key}"
                 if (s.getLayer(id) == null) {
+                    tileReadiness.register("$id-source", radarRasterCoverZoom(
+                        map?.cameraPosition?.zoom ?: session.zoom, weatherRasterTileSize(frame), frame.maxZoom))
                     s.addSource(weatherRasterSource(base, frame))
                     val layer = weatherRasterLayer(frame, !styleUrl.endsWith("dark"))
                     layer.setProperties(rasterOpacity(RADAR_STAGING_OPACITY))
@@ -2229,9 +2236,11 @@ private class NativeRadarController(
         }
     }
 
+    private fun weatherRasterTileSize(frame: RadarFrame) =
+        if (frame.field != null) frame.tile else if (frame.satellite) 256 else 512
+
     private fun weatherRasterSource(server: String, frame: RadarFrame) =
-        RasterSource("wx-${frame.key}-source", radarTileSet(server, frame),
-            if (frame.field != null) frame.tile else if (frame.satellite) 256 else 512)
+        RasterSource("wx-${frame.key}-source", radarTileSet(server, frame), weatherRasterTileSize(frame))
 
     private fun weatherRasterLayer(frame: RadarFrame, light: Boolean) =
         RasterLayer("wx-${frame.key}", "wx-${frame.key}-source").withProperties(
