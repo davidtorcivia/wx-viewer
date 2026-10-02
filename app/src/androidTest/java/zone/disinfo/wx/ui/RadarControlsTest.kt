@@ -46,6 +46,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -78,6 +79,38 @@ import zone.disinfo.wx.deviceArtifactDirectory
 class RadarControlsTest {
     @get:Rule val compose = createComposeRule()
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
+
+    @Test
+    fun compactLegendKeepsReadableLabelsAtTwoHundredPercentText() {
+        var fontScale by mutableStateOf(1f)
+        val session = RadarSession(instrumentation.targetContext, "compact-legend-${System.nanoTime()}",
+            Place("legend", "Legend", 40.7, -74.0)).apply { overlay = "radar" }
+        compose.setContent {
+            val density = LocalDensity.current
+            CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
+                WxTheme(ThemeMode.LIGHT) {
+                    Box(Modifier.width(320.dp).background(MaterialTheme.colorScheme.surface)
+                        .padding(8.dp).testTag("radar_compact_scale_fixture")) {
+                        RadarLegend(session, true, {}, Modifier.fillMaxWidth())
+                    }
+                }
+            }
+        }
+        for (scale in listOf(1f, 2f)) {
+            compose.runOnIdle { fontScale = scale }
+            // The real chooser shares the width. Crowded interior ticks may be omitted,
+            // but the unit and these separated scale anchors must remain fully readable.
+            for (label in listOf("Rain", ".03", ".5", "2")) {
+                val node = compose.onNodeWithText(label).assertIsDisplayed()
+                val layouts = mutableListOf<TextLayoutResult>()
+                node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+                assertFalse("$label must not clip or wrap at ${scale}x", layouts.single().hasVisualOverflow)
+                assertEquals("$label must stay on one readable line", 1, layouts.single().lineCount)
+            }
+            save("radar-compact-scale-${scale.toInt()}x",
+                compose.onNodeWithTag("radar_compact_scale_fixture").captureToImage().asAndroidBitmap())
+        }
+    }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test

@@ -10,6 +10,8 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
@@ -26,6 +28,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.printToString
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
@@ -283,7 +286,22 @@ class RadarConnectivityStatusTest {
         awaitUi(5_000, "compact unavailable panel") {
             compose.onAllNodes(hasTestTag("radar_error")).fetchSemanticsNodes().isNotEmpty()
         }
-        pumpUi()
+        awaitUi(5_000, "fully measured compact error text") {
+            val layouts = mutableListOf<TextLayoutResult>()
+            compose.onNodeWithTag("radar_error_message")
+                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            val retry = compose.onNodeWithText("Retry", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+            val error = compose.onNodeWithTag("radar_error").fetchSemanticsNode().boundsInRoot
+            val legend = compose.onNodeWithTag("radar_compact_legend").fetchSemanticsNode().boundsInRoot
+            val status = compose.onNodeWithTag("radar_saved_timestamp").fetchSemanticsNode().boundsInRoot
+            val expand = compose.onNodeWithContentDescription("Open the radar full screen")
+                .fetchSemanticsNode().boundsInRoot
+            layouts.singleOrNull()?.hasVisualOverflow == false && retry.width > 0 && retry.height > 0 &&
+                error.bottom < legend.top && error.top > maxOf(status.bottom, expand.bottom) &&
+                retry.top >= error.top && retry.bottom <= error.bottom
+        }
+        compose.onNodeWithTag("radar_error_message").assertIsDisplayed()
+        compose.onNodeWithText("Retry", useUnmergedTree = true).assertIsDisplayed()
         val error = compose.onNodeWithTag("radar_error").assertIsDisplayed().fetchSemanticsNode().boundsInRoot
         val legend = compose.onNodeWithTag("radar_compact_legend").fetchSemanticsNode().boundsInRoot
         val status = compose.onNodeWithTag("radar_saved_timestamp").fetchSemanticsNode().boundsInRoot
@@ -292,6 +310,9 @@ class RadarConnectivityStatusTest {
         assertTrue("Unavailable panel must stay above the legend: $error, $legend", error.bottom < legend.top)
         assertTrue("Unavailable panel must stay below status and expand: $error, $status, $expand",
             error.top > maxOf(status.bottom, expand.bottom))
+        val retry = compose.onNodeWithText("Retry", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertTrue("Retry ink must remain inside its panel: $retry, $error",
+            retry.top >= error.top && retry.bottom <= error.bottom && retry.right <= error.right)
     }
 
     private fun networkEvidence(): String = JSONObject()
