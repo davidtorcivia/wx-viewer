@@ -162,6 +162,12 @@ class RadarRasterContinuityTest {
                     .put("elapsedMs", SystemClock.uptimeMillis() - started).put("phase", phase)
                     .put("displayedStamp", runCatching { stamp() }.getOrNull() ?: JSONObject.NULL)
                 evidence.put(entry)
+                val weatherName = "%04d-%s-weather.png".format(sampleNumber, phase)
+                val weather = Bitmap.createBitmap(screenshot, bounds.left, bounds.top, bounds.width(), bounds.height())
+                try {
+                    File(directory, weatherName).outputStream().use { weather.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                } finally { if (weather !== screenshot) weather.recycle() }
+                entry.put("weatherScreenshot", weatherName)
                 if (save || sampleNumber % 12 == 0) {
                     val name = "%04d-%s.png".format(sampleNumber, phase)
                     File(directory, name).outputStream().use { screenshot.compress(Bitmap.CompressFormat.PNG, 100, it) }
@@ -210,7 +216,7 @@ class RadarRasterContinuityTest {
                     counts.fraction(Marker.BLUE) >= reference.fraction(Marker.BLUE) * .85)
                 samples++
                 SystemClock.sleep(35)
-            } while (SystemClock.uptimeMillis() < deadline)
+            } while (SystemClock.uptimeMillis() < deadline || samples < 5)
             assertTrue("Continuity needs a sequence of real compositor samples", samples >= 5)
         }
 
@@ -495,7 +501,8 @@ class RadarRasterContinuityTest {
             fun response(code: Int, type: String, bytes: ByteArray) = Response.Builder()
                 .request(request).protocol(Protocol.HTTP_1_1).code(code)
                 .message(if (code == 200) "OK" else "Intentional native test tile failure")
-                .header("Cache-Control", "no-store")
+                .header("Cache-Control", if (code == 200 && type == "image/png")
+                    "max-age=3600, immutable" else "no-store")
                 .body(bytes.toResponseBody(type.toMediaType())).build()
             if (url.host == "tiles.openfreemap.org" && url.queryParameter("native-continuity") == nonce)
                 return response(200, "application/json", style.toByteArray())
