@@ -24,6 +24,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -149,22 +150,29 @@ class ManualRefreshLifecycleE2eTest {
     fun cachedManualFailureCompletesAllRequestsAndKeepsCurrentFixAndContent() {
         seedForecasts()
         launchAndSettle()
-        val before = onMain { model.state }
         val foregroundPermission = LocationAccess.foregroundGranted(context)
         val backgroundPermission = LocationAccess.backgroundGranted(context)
-        assertNotNull(before.forecast)
-        assertNotNull(before.history)
         compose.onNodeWithTag("hero_temperature").assertTextContains("68", substring = true)
 
-        val request = onMain {
+        val (before, request) = onSettledWeather {
+            val before = model.state
+            val previous = captureRequest()
+            assertNotNull(before.forecast)
+            assertNotNull(before.history)
             model.refreshFromGesture()
-            assertTrue(model.state.refreshing)
-            assertTrue(model.state.loading)
-            assertEquals(before.refreshRevision + 1, model.state.refreshRevision)
+            val started = assertNewManualRequest(previous, before.refreshRevision)
+            // The forecast's offline result can precede the remaining history/rain work.
+            if (!model.state.loading) {
+                assertEquals(
+                    if (model.state.networkAvailability == NetworkAvailability.OFFLINE) "Offline"
+                    else "Update unavailable",
+                    model.state.error,
+                )
+            }
             assertSame(before.forecast, model.state.forecast)
             assertSame(before.history, model.state.history)
             assertFalse(model.state.locating)
-            captureRequest()
+            before to started
         }
         awaitManualCompletion(request)
 
@@ -275,11 +283,12 @@ class ManualRefreshLifecycleE2eTest {
     @Test
     fun emptyCacheFailureStopsManualRefreshAndAllowsAnotherAttempt() {
         launchAndSettle()
-        val first = onMain {
+        val first = onSettledWeather {
+            val previous = captureRequest()
+            val revision = model.state.refreshRevision
             assertNull(model.state.forecast)
             model.refreshFromGesture()
-            assertTrue(model.state.refreshing)
-            captureRequest()
+            assertNewManualRequest(previous, revision)
         }
         awaitManualCompletion(first)
         onMain {
@@ -290,12 +299,11 @@ class ManualRefreshLifecycleE2eTest {
                 assertEquals("Offline · no saved forecast", model.state.error)
             }
         }
-        val retry = onMain {
+        val retry = onSettledWeather {
+            val previous = captureRequest()
             val revision = model.state.refreshRevision
             model.refreshFromGesture()
-            assertTrue(model.state.refreshing)
-            assertEquals(revision + 1, model.state.refreshRevision)
-            captureRequest()
+            assertNewManualRequest(previous, revision)
         }
         awaitManualCompletion(retry)
     }
@@ -403,12 +411,22 @@ class ManualRefreshLifecycleE2eTest {
     private fun launchAndSettle() {
         scenario = ActivityScenario.launch(MainActivity::class.java)
         scenario!!.onActivity { model = ViewModelProvider(it)[WxViewModel::class.java] }
+        onSettledWeather { Unit }
+    }
+
+    private fun <T> onSettledWeather(block: () -> T): T {
+        var result: Result<T>? = null
         compose.waitUntil(45_000) {
             onMain {
-                !model.state.loading && !model.state.refreshing &&
+                val settled = !model.state.loading && !model.state.refreshing &&
                     job("loadJob")?.isCompleted != false && job("rainJob")?.isCompleted != false
+                // Check idleness and start the tested action in one UI turn, so a lifecycle
+                // refresh cannot slip between the precondition and the manual request.
+                if (settled) result = runCatching(block)
+                settled
             }
         }
+        return requireNotNull(result).getOrThrow()
     }
 
     private fun awaitManualCompletion(request: Request) {
@@ -458,6 +476,19 @@ class ManualRefreshLifecycleE2eTest {
     private fun captureRequest() = Request(
         requireNotNull(job("loadJob")), job("rainJob"), number("generation"), number("rainGeneration")
     )
+
+    private fun assertNewManualRequest(previous: Request, previousRevision: Int): Request {
+        val started = captureRequest()
+        assertNotSame(previous.load, started.load)
+        assertNotSame(previous.rain, started.rain)
+        assertEquals(previous.generation + 1, started.generation)
+        assertEquals(previous.rainGeneration + 1, started.rainGeneration)
+        assertEquals(previousRevision + 1, model.state.refreshRevision)
+        // A fast offline result can finish before the call returns. The manual indicator
+        // must track the entire captured request, including its history/rain children.
+        assertEquals(!started.load.isCompleted, model.state.refreshing)
+        return started
+    }
 
     private fun assertSameRequest(expected: Request, actual: Request) {
         assertSame(expected.load, actual.load)
