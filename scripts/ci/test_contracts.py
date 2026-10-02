@@ -97,11 +97,12 @@ class CoverageContractTest(unittest.TestCase):
                            'minifiedPreview': True, 'failures': [], 'results': results})
         for shard in range(3):
             self.write(f'layers-{shard}-continuity.json', continuity_report(shard))
+            (self.root / f'layers-{shard}-native-video.txt').write_text('true\n')
             for suffix in ('-acquisition', '-analysis', ''):
                 (self.root / f'layers-{shard}-continuity{suffix}-status.txt').write_text('0\n')
         for lane in coverage.LANES:
             self.write(lane + '-phase-tests.json', {name: {method: {'code': 0} for method in methods}
-                       for name, methods in coverage.phases_contract.required_logs(lane).items()})
+                       for name, methods in coverage.phases_contract.required_logs(lane, native_video=True).items()})
         source = instrumentation.source_inventory(HERE.resolve().parents[1] / 'app/src/androidTest')
         self.write('debug-tests.json', {'discovered': len(source), 'executed': len(source),
                    'tests': {key: {'code': 0} for key in source}})
@@ -115,37 +116,62 @@ class CoverageContractTest(unittest.TestCase):
         self.write(name, data)
 
     def test_complete_union(self):
+        result = coverage.validate(self.root, native_video=True)
+        self.assertEqual(result['layers'], {'live': 28, 'saved': 28, 'empty': 28})
+
+    def test_default_preserves_original_coverage_without_claiming_video_proof(self):
+        for shard in range(3):
+            (self.root / f'layers-{shard}-native-video.txt').write_text('false\n')
+            for path in self.root.glob(f'layers-{shard}-continuity*'):
+                path.unlink()
+            self.mutate(f'layers-{shard}-phase-tests.json', lambda d: [d.pop(key) for key in list(d) if '/continuity/' in key])
         result = coverage.validate(self.root)
         self.assertEqual(result['layers'], {'live': 28, 'saved': 28, 'empty': 28})
+        self.assertEqual(result['continuous_native_videos'], 0)
+        self.assertEqual(result['native_video_status'], 'not-requested')
+        self.assertFalse(result['continuity_proven'])
+        self.mutate('layers-0-phase-tests.json', lambda d: d.pop('radar-layers-preview/offline-empty.log'))
+        with self.assertRaises(AssertionError): coverage.validate(self.root)
+
+    def test_optin_cannot_be_downgraded_by_a_shard_marker(self):
+        (self.root / 'layers-0-native-video.txt').write_text('false\n')
+        with self.assertRaises(AssertionError): coverage.validate(self.root, native_video=True)
+
+    def test_missing_or_unexpected_optin_marker_cannot_pass(self):
+        for marker in ('', '1', 'invalid'):
+            (self.root / 'layers-0-native-video.txt').write_text(marker)
+            with self.assertRaises(AssertionError): coverage.validate(self.root, native_video=True)
+        (self.root / 'layers-0-native-video.txt').unlink()
+        with self.assertRaises(AssertionError): coverage.validate(self.root, native_video=True)
 
     def test_missing_continuity_video_cannot_pass(self):
         self.mutate('layers-0-continuity.json', lambda d: d['captures'].pop())
-        with self.assertRaises(AssertionError): coverage.validate(self.root)
+        with self.assertRaises(AssertionError): coverage.validate(self.root, native_video=True)
 
     def test_unexplained_inconclusive_cannot_pass(self):
         self.mutate('layers-1-continuity.json', lambda d: d.update(status='inconclusive', passed=False))
-        with self.assertRaises(AssertionError): coverage.validate(self.root)
+        with self.assertRaises(AssertionError): coverage.validate(self.root, native_video=True)
 
     def test_only_whitelisted_acquisition_limits_are_nonblocking_and_explicit(self):
         self.mutate('layers-1-continuity.json', acquisition_limited)
         for suffix in ('-analysis', ''):
             (self.root / f'layers-1-continuity{suffix}-status.txt').write_text('1\n')
-        result = coverage.validate(self.root)
+        result = coverage.validate(self.root, native_video=True)
         self.assertFalse(result['continuity_proven'])
         self.assertEqual(len(result['nonblocking_acquisition_limits']), 1)
         # No generated gate JSON is trusted; aggregate recomputes from raw evidence.
         self.write('layers-1-continuity-gate.json', {'gatePassed': True})
         self.mutate('layers-1-continuity.json', lambda d: d['captures'][0]['failures'].append(
             {'code': 'black_frame', 'status': 'failed'}))
-        with self.assertRaises(AssertionError): coverage.validate(self.root)
+        with self.assertRaises(AssertionError): coverage.validate(self.root, native_video=True)
 
     def test_duplicate_continuity_video_cannot_pass(self):
         self.mutate('layers-0-continuity.json', lambda d: d['captures'].append(d['captures'][0]))
-        with self.assertRaises(AssertionError): coverage.validate(self.root)
+        with self.assertRaises(AssertionError): coverage.validate(self.root, native_video=True)
 
     def test_special_phase_skip_cannot_pass(self):
         self.mutate('playback-phase-tests.json', lambda d: next(iter(next(iter(d.values())).values())).update(code=-4))
-        with self.assertRaises(AssertionError): coverage.validate(self.root)
+        with self.assertRaises(AssertionError): coverage.validate(self.root, native_video=True)
 
     def test_filtered_source_test_cannot_disappear(self):
         def omit(d):
@@ -153,11 +179,11 @@ class CoverageContractTest(unittest.TestCase):
             d['executed'] -= 1
             d['discovered'] -= 1
         self.mutate('debug-tests.json', omit)
-        with self.assertRaises(AssertionError): coverage.validate(self.root)
+        with self.assertRaises(AssertionError): coverage.validate(self.root, native_video=True)
 
     def test_missing_shard_fails(self):
         (self.root / 'layers-1-live.json').unlink()
-        with self.assertRaises(AssertionError): coverage.validate(self.root)
+        with self.assertRaises(AssertionError): coverage.validate(self.root, native_video=True)
 
     def test_duplicate_or_missing_case_fails(self):
         for operation in ('duplicate', 'missing'):
@@ -167,28 +193,28 @@ class CoverageContractTest(unittest.TestCase):
                 if operation == 'duplicate': data['results'].append(data['results'][0])
                 else: data['results'].pop()
                 self.write('layers-0-saved.json', data)
-                with self.assertRaises(AssertionError): coverage.validate(self.root)
+                with self.assertRaises(AssertionError): coverage.validate(self.root, native_video=True)
                 self.write('layers-0-saved.json', original)
 
     def test_cross_layer_stress_cannot_disappear(self):
         self.mutate('layers-0-live.json', lambda d: d['results'].pop())
-        with self.assertRaises(AssertionError): coverage.validate(self.root)
+        with self.assertRaises(AssertionError): coverage.validate(self.root, native_video=True)
 
     def test_wrong_shard_cannot_pass(self):
         self.mutate('layers-1-empty.json', lambda d: d.update(shardIndex=2))
-        with self.assertRaises(AssertionError): coverage.validate(self.root)
+        with self.assertRaises(AssertionError): coverage.validate(self.root, native_video=True)
 
     def test_lane_failure_cannot_pass(self):
         (self.root / 'playback-status.txt').write_text('1\n')
-        with self.assertRaises(AssertionError): coverage.validate(self.root)
+        with self.assertRaises(AssertionError): coverage.validate(self.root, native_video=True)
 
     def test_missing_separate_phase_cannot_pass(self):
         (self.root / 'debug-phases.tsv').write_text('phase\t0\t10\n' * 4)
-        with self.assertRaises(AssertionError): coverage.validate(self.root)
+        with self.assertRaises(AssertionError): coverage.validate(self.root, native_video=True)
 
     def test_partial_android_suite_cannot_pass(self):
         self.mutate('debug-tests.json', lambda d: d.update(executed=159))
-        with self.assertRaises(AssertionError): coverage.validate(self.root)
+        with self.assertRaises(AssertionError): coverage.validate(self.root, native_video=True)
 
 
 class RadarNegativeControlContractTest(unittest.TestCase):

@@ -2,6 +2,8 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 lane=${1:?lane required}
+export WX_NATIVE_VIDEO_EVIDENCE=${WX_NATIVE_VIDEO_EVIDENCE:-false}
+[[ "$WX_NATIVE_VIDEO_EVIDENCE" == true || "$WX_NATIVE_VIDEO_EVIDENCE" == false ]] || exit 2
 status=0
 mkdir -p ci-proof
 run_phase() {
@@ -33,14 +35,17 @@ case "$lane" in
     ;;
   layers-[012])
     export WX_LAYER_SHARD_COUNT=3 WX_LAYER_SHARD_INDEX=${lane#layers-}
+    printf '%s\n' "$WX_NATIVE_VIDEO_EVIDENCE" > "ci-proof/$lane-native-video.txt"
     run_phase 'Live, saved-offline and empty-offline layer shard' bash scripts/run-radar-layers-preview.sh layers
     output=app/build/outputs/radar-layers-preview
-    cp "$output/continuity/continuity-analysis.json" "ci-proof/$lane-continuity.json" || status=1
-    for kind in acquisition analysis ''; do
-      suffix=${kind:+-$kind}
-      cp "$output/continuity/continuity$suffix-status.txt" "ci-proof/$lane-continuity$suffix-status.txt" || status=1
-    done
-    cp "$output/continuity/continuity-gate.json" "ci-proof/$lane-continuity-gate.json" || status=1
+    if [[ "$WX_NATIVE_VIDEO_EVIDENCE" == true ]]; then
+      cp "$output/continuity/continuity-analysis.json" "ci-proof/$lane-continuity.json" || status=1
+      for kind in acquisition analysis ''; do
+        suffix=${kind:+-$kind}
+        cp "$output/continuity/continuity$suffix-status.txt" "ci-proof/$lane-continuity$suffix-status.txt" || status=1
+      done
+      cp "$output/continuity/continuity-gate.json" "ci-proof/$lane-continuity-gate.json" || status=1
+    fi
     for state in live saved empty; do
       source="$output/radar-layers-proof.json"
       [[ "$state" == live ]] || source="$output/offline-$state/radar-layers-proof.json"

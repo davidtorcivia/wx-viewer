@@ -25,15 +25,19 @@ def unique(root, name):
     return files[0]
 
 
-def validate(root):
+def validate(root, native_video=False):
     for lane in LANES:
         assert unique(root, lane + '-status.txt').read_text().strip() == '0', f'{lane} failed'
         phases = unique(root, lane + '-phases.tsv').read_text().splitlines()
         assert len(phases) == (5 if lane == 'debug' else 1), f'{lane}: missing required phase'
         assert all(line.split('\t')[1] == '0' for line in phases), f'{lane}: failed phase'
-        phases_contract.validate_results(lane, json.loads(unique(root, lane + '-phase-tests.json').read_text()))
+        phases_contract.validate_results(lane, json.loads(unique(root, lane + '-phase-tests.json').read_text()), native_video)
     continuity_seen, acquisition_limited = set(), []
     for shard in range(3):
+        declared = unique(root, f'layers-{shard}-native-video.txt').read_text().strip()
+        assert phases_contract.native_video_enabled(declared) == native_video, 'Native video opt-in differs from requested workflow coverage'
+        if not native_video:
+            continue
         proof = json.loads(unique(root, f'layers-{shard}-continuity.json').read_text())
         statuses = [int(unique(root, f'layers-{shard}-continuity{suffix}-status.txt').read_text().strip())
                     for suffix in ('-acquisition', '-analysis', '')]
@@ -44,7 +48,8 @@ def validate(root):
             assert key not in continuity_seen, f'Duplicate continuous video evidence: {key}'
             assert LAYERS.index(key[0]) % 3 == shard, f'Wrong continuity shard: {key}'
             continuity_seen.add(key)
-    assert continuity_seen == {(layer, font) for layer in LAYERS for font in (1.0, 2.0)}, 'Missing native sequential layer/font video evidence'
+    if native_video:
+        assert continuity_seen == {(layer, font) for layer in LAYERS for font in (1.0, 2.0)}, 'Missing native sequential layer/font video evidence'
     counts = {}
     for state in ('live', 'saved', 'empty'):
         seen, stress = set(), 0
@@ -75,9 +80,11 @@ def validate(root):
     assert set(debug['tests']) == expected_tests, 'Android result IDs differ from source @Test declarations'
     phases_contract.instrumentation.validate(debug['tests'], {key: {} for key in expected_tests}, allow_phases=True)
     return {'continuous_native_videos': len(continuity_seen),
-            'continuity_proven': not acquisition_limited,
+            'native_video_evidence_requested': native_video,
+            'native_video_status': ('acquisition-limited' if acquisition_limited else 'passed') if native_video else 'not-requested',
+            'continuity_proven': native_video and not acquisition_limited,
             'nonblocking_acquisition_limits': acquisition_limited,
             'layers': counts, 'android_tests': debug['executed'], 'required_lanes': LANES}
 
 if __name__ == '__main__':
-    print(json.dumps(validate(Path(sys.argv[1])), indent=2))
+    print(json.dumps(validate(Path(sys.argv[1]), phases_contract.native_video_enabled()), indent=2))

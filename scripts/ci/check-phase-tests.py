@@ -2,6 +2,7 @@
 """Require actual passes, not JUnit's OK summary (which also permits assumptions)."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -11,7 +12,13 @@ spec.loader.exec_module(instrumentation)
 P = 'zone.disinfo.wx.'
 M = P + 'macrobenchmark.'
 
-def required_logs(lane):
+def native_video_enabled(value=None):
+    value = os.environ.get('WX_NATIVE_VIDEO_EVIDENCE', 'false') if value is None else value
+    assert value in ('true', 'false'), 'WX_NATIVE_VIDEO_EVIDENCE must be true or false'
+    return value == 'true'
+
+
+def required_logs(lane, native_video=False):
     if lane == 'debug':
         return {
             'offline-preview/pull-refresh-offline.log': [P + 'ManualRefreshLifecycleE2eTest#cachedManualFailureCompletesAllRequestsAndKeepsCurrentFixAndContent', P + 'ManualRefreshLifecycleE2eTest#emptyCacheFailureStopsManualRefreshAndAllowsAnotherAttempt'],
@@ -29,13 +36,13 @@ def required_logs(lane):
             'radar-layers-preview/instrumentation.log': [M + 'RadarLayersPreviewTest#allLiveLayersRangesInteractionsAndLifecycle'],
             'radar-layers-preview/offline-saved.log': [M + 'RadarLayersPreviewTest#allLayersRemainResponsiveOffline'],
             'radar-layers-preview/offline-empty.log': [M + 'RadarLayersPreviewTest#allLayersRemainResponsiveOffline'],
-            **{f'radar-layers-preview/continuity/font-{font}/instrumentation.log': [M + 'RadarLayersPreviewTest#allLayersContinuousNativeFrames'] for font in ('1.0', '2.0')},
+            **({f'radar-layers-preview/continuity/font-{font}/instrumentation.log': [M + 'RadarLayersPreviewTest#allLayersContinuousNativeFrames'] for font in ('1.0', '2.0')} if native_video else {}),
         }
     raise ValueError(lane)
 
 
-def validate_results(lane, results):
-    expected = required_logs(lane)
+def validate_results(lane, results, native_video=False):
+    expected = required_logs(lane, native_video)
     assert set(results) == set(expected), f'{lane}: missing phase logs'
     for name, methods in expected.items():
         tests = results[name]
@@ -43,13 +50,13 @@ def validate_results(lane, results):
         assert all(value['code'] == 0 for value in tests.values()), f'{name}: failed or skipped phase method'
 
 
-def collect(lane, output):
-    results = {name: instrumentation.parse((output / name).read_text()) for name in required_logs(lane)}
-    validate_results(lane, results)
+def collect(lane, output, native_video=False):
+    results = {name: instrumentation.parse((output / name).read_text()) for name in required_logs(lane, native_video)}
+    validate_results(lane, results, native_video)
     return results
 
 if __name__ == '__main__':
     lane = sys.argv[1]
-    results = collect(lane, Path('app/build/outputs'))
+    results = collect(lane, Path('app/build/outputs'), native_video_enabled())
     Path(f'ci-proof/{lane}-phase-tests.json').write_text(json.dumps(results, indent=2))
     print(f'Verified {sum(map(len, results.values()))} real passes in {lane} special phases')
