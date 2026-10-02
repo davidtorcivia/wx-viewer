@@ -157,5 +157,47 @@ class CoverageContractTest(unittest.TestCase):
         self.mutate('debug-tests.json', lambda d: d.update(executed=159))
         with self.assertRaises(AssertionError): coverage.validate(self.root)
 
+
+class RadarNegativeControlContractTest(unittest.TestCase):
+    def setUp(self):
+        self.validator = load('radar_negative_control', 'check-radar-negative-control.py')
+        self.failure = 'java.lang.AssertionError: clouds/delayed-replacement painted an unknown/blank/double-weather composite: {"red":0}'
+        self.log = ('INSTRUMENTATION_STATUS: class=zone.disinfo.wx.ui.RadarRasterContinuityTest\n'
+                    'INSTRUMENTATION_STATUS: test=cloudsRetainWeatherThroughDelayedFailedAndStaleTiles\n'
+                    f'INSTRUMENTATION_STATUS: stack={self.failure}\n'
+                    'INSTRUMENTATION_STATUS_CODE: -2\nINSTRUMENTATION_CODE: -1\n')
+        self.metrics = {'overlay': 'clouds', 'field': 'cloud', 'outcome': 'failed', 'failure': self.failure,
+                        'requests': {'unrelatedPendingBasemap': 1, '/continuity-cloud-1-fixture': 1},
+                        'samples': [{'phase': 'initial-ready', 'red': 1., 'redComposite': 1., 'sequence': 0,
+                                     'pixels': 10000, 'weatherScreenshot': 'ready.png'},
+                                    {'phase': 'delayed-replacement', 'red': 0., 'redComposite': 0., 'sequence': 1,
+                                     'pixels': 10000, 'weatherScreenshot': 'gap.png'}]}
+
+    def test_known_gap_with_real_pixel_evidence_is_required(self):
+        proof = self.validator.validate(self.log, '', self.metrics, lambda _: True)
+        self.assertTrue(proof['validNegativeControl'])
+
+    def test_arbitrary_assertion_is_not_negative_evidence(self):
+        with self.assertRaises(AssertionError):
+            self.validator.validate(self.log.replace(self.failure, 'java.lang.AssertionError: Timeout'), '', self.metrics, lambda _: True)
+
+    def test_crash_linkage_access_errors_cannot_pass(self):
+        for error in ('FATAL EXCEPTION', 'NoSuchMethodError', 'IllegalAccessError', 'SecurityException'):
+            with self.subTest(error=error), self.assertRaises(AssertionError):
+                self.validator.validate(self.log, error, self.metrics, lambda _: True)
+
+    def test_missing_native_pixels_or_transport_cannot_pass(self):
+        for key in ('samples', 'requests'):
+            metrics = copy.deepcopy(self.metrics); metrics[key] = [] if key == 'samples' else {}
+            with self.subTest(key=key), self.assertRaises(AssertionError):
+                self.validator.validate(self.log, '', metrics, lambda _: True)
+        with self.assertRaises(AssertionError):
+            self.validator.validate(self.log, '', self.metrics, lambda _: False)
+
+    def test_pass_skip_and_runner_error_are_not_expected_failure(self):
+        for code in ('0', '-1', '-3', '-4'):
+            with self.subTest(code=code), self.assertRaises(AssertionError):
+                self.validator.validate(self.log.replace('STATUS_CODE: -2', 'STATUS_CODE: ' + code), '', self.metrics, lambda _: True)
+
 if __name__ == '__main__':
     unittest.main()
