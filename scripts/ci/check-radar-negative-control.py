@@ -14,13 +14,57 @@ EXPECTED = re.compile(r'^java\.lang\.AssertionError: clouds/delayed-replacement 
 FORBIDDEN = re.compile(r'FATAL EXCEPTION|Fatal signal|INSTRUMENTATION_FAILED|Process crashed|NoSuchMethodError|NoSuchFieldError|IllegalAccessError|NoClassDefFoundError|SecurityException')
 
 
+LOGCAT_LINE = re.compile(r'^\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+\s+(\d+)\s+(\d+)\s+([VDIWEAF])\s+([^:]+):\s*(.*)$')
+TARGET_START = re.compile(r'Start proc (\d+):zone\.disinfo\.wx(?:\.test)?(?::[^/\s]+)?/u(\d+)a(\d+)\b')
+STATS_PERMISSION = re.compile(r'^java\.lang\.SecurityException: Need REGISTER_STATS_PULL_ATOM permission\.: Neither user (\d+) nor current process has android\.permission\.REGISTER_STATS_PULL_ATOM\.$')
+
+
+def classify_runtime_diagnostics(logcat):
+    """Keep fail-closed matching; exempt only the observed unrelated OS stats warning.
+
+    Run36962125678's actual log attributes this warning to Binder in system_server,
+    calling UID10120; ActivityManager separately proves the WX/test PIDs and UIDs.
+    Never suppress it in an app/test PID, for the app/test UID, without attribution,
+    or as an instrumentation failure. Preserve the exact ignored line in the proof.
+    """
+    target_pids, target_uids, system_pids = set(), set(), set()
+    attribution_lines = []
+    for line in logcat.splitlines():
+        parsed = LOGCAT_LINE.match(line)
+        if parsed and parsed[4].strip() == 'ActivityManager':
+            started = TARGET_START.search(parsed[5])
+            if started:
+                target_pids.add(int(started[1]))
+                target_uids.add(int(started[2]) * 100000 + 10000 + int(started[3]))
+                system_pids.add(int(parsed[1]))
+                attribution_lines.append(line)
+    rejected, ignored = [], []
+    for line in logcat.splitlines():
+        if not FORBIDDEN.search(line):
+            continue
+        parsed = LOGCAT_LINE.match(line)
+        stats = STATS_PERMISSION.match(parsed[5]) if parsed else None
+        if (parsed and stats and target_pids and target_uids and int(parsed[1]) in system_pids
+                and int(parsed[1]) not in target_pids and parsed[3] == 'W'
+                and parsed[4].strip() == 'Binder' and int(stats[1]) not in target_uids):
+            ignored.append(line)
+        else:
+            rejected.append(line)
+    attribution = {'targetProcessIds': sorted(target_pids), 'targetUids': sorted(target_uids),
+                   'systemServerProcessIds': sorted(system_pids),
+                   'activityManagerStartLines': attribution_lines}
+    return rejected, ignored, attribution
+
+
 def validate(log, logcat, metrics, image_exists):
     tests = instrumentation.parse(log)
     assert set(tests) == {TEST}, 'Negative control did not run exactly the requested test'
     result = tests[TEST]
     assert result['code'] == -2, 'Expected a JUnit assertion failure, not pass/skip/crash/error'
     assert EXPECTED.match(result['stack']), 'Failure is not the known delayed-replacement weather gap'
-    assert not FORBIDDEN.search(log + '\n' + logcat), 'Crash, access/linkage or instrumentation error invalidates negative control'
+    assert not FORBIDDEN.search(log), 'Crash, access/linkage or instrumentation error in test output invalidates negative control'
+    rejected, ignored, attribution = classify_runtime_diagnostics(logcat)
+    assert not rejected, 'Crash, access/linkage or unattributed runtime error invalidates negative control: ' + ' | '.join(rejected)[:2000]
     assert re.search(r'^INSTRUMENTATION_CODE: -1\s*$', log, re.M), 'Runner did not complete normally'
     assert metrics.get('overlay') == 'clouds' and metrics.get('field') == 'cloud'
     assert metrics.get('outcome') == 'failed' and EXPECTED.match(metrics.get('failure', '')), 'Metrics failure differs from known rendering failure'
@@ -37,7 +81,9 @@ def validate(log, logcat, metrics, image_exists):
     return {'validNegativeControl': True, 'result': 'expected-weather-gap-detected', 'test': TEST,
             'failure': result['stack'], 'initialReadySequence': ready[0]['sequence'], 'gapSequence': gaps[0]['sequence'],
             'initialRedFraction': ready[0]['red'], 'gapRedFraction': gaps[0]['red'],
-            'gapRedCompositeFraction': gaps[0]['redComposite']}
+            'gapRedCompositeFraction': gaps[0]['redComposite'],
+            'ignoredUnrelatedSystemStatsWarnings': ignored,
+            'ignoredWarningAttribution': attribution if ignored else None}
 
 
 def main(root):

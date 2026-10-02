@@ -194,6 +194,19 @@ class RadarNegativeControlContractTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.validator.validate(self.log, '', self.metrics, lambda _: False)
 
+    def test_only_proven_unrelated_system_stats_warning_is_ignored(self):
+        start = '10-02 03:59:06.749 542 576 I ActivityManager: Start proc 1848:zone.disinfo.wx/u0a148 for added application zone.disinfo.wx'
+        warning = '10-02 03:59:07.681 542 1637 W Binder : java.lang.SecurityException: Need REGISTER_STATS_PULL_ATOM permission.: Neither user 10120 nor current process has android.permission.REGISTER_STATS_PULL_ATOM.'
+        proof = self.validator.validate(self.log, start + '\n' + warning, self.metrics, lambda _: True)
+        self.assertEqual(proof['ignoredUnrelatedSystemStatsWarnings'], [warning])
+        for invalid in (warning, start + '\n' + warning.replace('542 1637', '1848 1637'),
+                        start + '\n' + warning.replace('user 10120', 'user 10148'),
+                        start + '\n' + warning.replace('542 1637', '999 1637'),
+                        start + '\n' + warning.replace(' W Binder', ' E Binder'),
+                        start + '\n' + warning.replace('REGISTER_STATS_PULL_ATOM', 'CAMERA')):
+            with self.subTest(invalid=invalid), self.assertRaises(AssertionError):
+                self.validator.validate(self.log, invalid, self.metrics, lambda _: True)
+
     def test_pass_skip_and_runner_error_are_not_expected_failure(self):
         for code in ('0', '-1', '-3', '-4'):
             with self.subTest(code=code), self.assertRaises(AssertionError):
