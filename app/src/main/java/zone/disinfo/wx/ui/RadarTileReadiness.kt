@@ -22,11 +22,19 @@ internal class RadarTileReadiness {
     fun record(source: String, tile: String, operation: TileOperation) {
         val state = sources.getOrPut(source) { SourceState() }
         when (operation) {
-            TileOperation.RequestedFromCache, TileOperation.RequestedFromNetwork,
+            TileOperation.RequestedFromNetwork -> {
+                // Native 11.8 reannounces network interest when a decoded cached tile
+                // becomes visible again, even when no HTTP/load/parse will follow.
+                if (tile !in state.parsed) state.pending += tile
+                state.failed -= tile
+            }
             TileOperation.StartParse -> {
                 state.pending += tile
                 state.failed -= tile
             }
+            // These also probe optional parent zooms. A miss can have no terminal event;
+            // actual work is announced by RequestedFromNetwork or StartParse instead.
+            TileOperation.RequestedFromCache -> Unit
             TileOperation.EndParse -> {
                 state.pending -= tile
                 state.failed -= tile
