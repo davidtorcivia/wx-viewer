@@ -8,6 +8,7 @@ import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Rect
+import android.os.Looper
 import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
@@ -23,6 +24,7 @@ import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.lifecycle.LifecycleOwner
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.DataOutputStream
@@ -132,6 +134,8 @@ class RadarRasterContinuityTest {
         val showing = mutableStateOf(true)
         val evidence = JSONArray()
         val actions = JSONArray()
+        val nativeStates = JSONArray()
+        var nativeController: Any? = null
         val directory = File(deviceArtifactDirectory(context), "raster-continuity-${if (nowcast) "nowcast" else overlay}").apply { mkdirs() }
         val client = OkHttpClient.Builder().dispatcher(Dispatcher().apply {
             maxRequests = 128
@@ -217,7 +221,8 @@ class RadarRasterContinuityTest {
             } finally { screenshot.recycle() }
         }
 
-        fun awaitColor(phase: String, marker: Marker, outgoing: Marker? = null, timeoutMs: Long = 15_000): Counts {
+        fun awaitColor(phase: String, marker: Marker, outgoing: Marker? = null, timeoutMs: Long = 15_000,
+                       requiredParsedSource: String? = null): Counts {
             val deadline = SystemClock.uptimeMillis() + timeoutMs
             do {
                 val counts = capture(phase)
@@ -225,6 +230,10 @@ class RadarRasterContinuityTest {
                 // incoming frame. A dark gap or two overlaid weather colors fails here.
                 if (outgoing != null) assertComposite(counts, phase, listOf(outgoing, marker))
                 if (counts.fraction(marker) >= if (overlay == "both") .12 else .65) {
+                    requiredParsedSource?.let {
+                        assertTrue("$phase painted before the recreated source's own EndParse: $it",
+                            (sourceParses[it]?.get() ?: 0) > 0)
+                    }
                     assertComposite(counts, phase, listOf(marker))
                     return capture("$phase-ready", save = true).also {
                         assertComposite(it, "$phase-ready", listOf(marker))
@@ -267,6 +276,84 @@ class RadarRasterContinuityTest {
 
         fun action(phase: String) = JSONObject().put("phase", phase)
             .put("elapsedMs", SystemClock.uptimeMillis() - started).also { actions.put(it) }
+
+        fun onMain(block: () -> Unit) {
+            if (Looper.myLooper() == Looper.getMainLooper()) block()
+            else instrumentation.runOnMainSync(block)
+        }
+
+        fun nativeInstance(frame: RadarFrame): String {
+            var result: String? = null
+            onMain {
+                val style = requireNotNull(nativeMap.get().style)
+                val prefix = "wx-${frame.key}-instance-"
+                val ids = style.layers.map { it.id }.filter {
+                    it.startsWith(prefix) && it.removePrefix(prefix).toLongOrNull() != null ||
+                        pixelNegativeControl && it == "wx-${frame.key}"
+                }
+                assertTrue("Exactly one active native instance must represent ${frame.key}: $ids", ids.size == 1)
+                result = ids.single()
+                assertTrue("Native instance must own its source", style.getSource("$result-source") != null)
+            }
+            return requireNotNull(result)
+        }
+
+        fun assertRetired(id: String) = onMain {
+            val style = requireNotNull(nativeMap.get().style)
+            assertTrue("Retired native layer/source must be absent: $id",
+                style.getLayer(id) == null && style.getSource("$id-source") == null)
+        }
+
+        fun snapshotNative(phase: String) {
+            if (nativeStates.length() >= 64) return
+            val state = JSONObject().put("phase", phase)
+                .put("elapsedMs", SystemClock.uptimeMillis() - started)
+                .put("nativeFully", nativeFully.get()).put("nativeRenderCount", nativeRenderCount.get())
+                .put("requests", transport.requestEvidence())
+            onMain {
+                runCatching {
+                    state.put("sessionTime", session.time)
+                        .put("sessionFrames", JSONArray(session.frames.frames.map { it.key }))
+                        .put("sessionOverlay", session.overlay).put("sessionRange", session.range)
+                        .put("sessionPlaying", session.playing).put("sessionSavedView", session.showingSavedView)
+                    val view = attached.get()
+                    val activity = view?.let { findActivity(it.context) }
+                    state.put("viewAttached", view?.isAttachedToWindow).put("viewShown", view?.isShown)
+                        .put("viewVisibility", view?.visibility).put("windowVisibility", view?.windowVisibility)
+                        .put("windowFocused", view?.hasWindowFocus())
+                        .put("activityFinishing", activity?.isFinishing).put("activityDestroyed", activity?.isDestroyed)
+                        .put("lifecycle", (activity as? LifecycleOwner)?.lifecycle?.currentState?.name)
+                    val map = nativeMap.get()
+                    state.put("camera", map?.cameraPosition?.toString())
+                    map?.style?.let { style ->
+                        state.put("sources", JSONArray(style.sources.map { it.id }))
+                        state.put("layers", JSONArray(style.layers.map { layer ->
+                            JSONObject().put("id", layer.id).put("visibility", layer.visibility.value).apply {
+                                if (layer is RasterLayer) put("source", layer.sourceId)
+                                    .put("opacity", layer.rasterOpacity.value)
+                            }
+                        }))
+                    }
+                    nativeController?.let { owner ->
+                        val controller = JSONObject()
+                        listOf("current", "backdrop", "paintedFrame", "pendingFrame", "paintedLayers",
+                            "pendingLayers", "cached", "retireOnHide", "disposed", "resumed", "cameraMoving",
+                            "frameRequest", "acceptRenderedFrame", "renderedSerial", "pendingAfterSerial").forEach { name ->
+                            val value = owner.javaClass.getDeclaredField(name).apply { isAccessible = true }.get(owner)
+                            controller.put(name, when (value) {
+                                null -> JSONObject.NULL
+                                is RadarFrame -> value.key
+                                is Collection<*> -> JSONArray(value)
+                                is Map<*, *> -> JSONObject(value)
+                                else -> value
+                            })
+                        }
+                        state.put("controller", controller)
+                    }
+                }.onFailure { state.put("diagnosticError", it.toString()) }
+            }
+            nativeStates.put(state)
+        }
 
         fun clearFixtureAmbientCache(phase: String, expectedStamp: String) {
             val cleared = AtomicBoolean()
@@ -337,6 +424,7 @@ class RadarRasterContinuityTest {
             }
             instrumentation.runOnMainSync {
                 val view = requireNotNull(attached.get())
+                nativeController = findNativeController(view)
                 val location = IntArray(2).also { view.getLocationOnScreen(it) }
                 // A broad weather-only strip below the top controls, above the center error
                 // message and bottom transport. Does not inspect timestamps or basemap detail.
@@ -344,6 +432,7 @@ class RadarRasterContinuityTest {
                     location[0] + view.width * 85 / 100, location[1] + view.height * 40 / 100)
             }
             val red = awaitColor("initial", Marker.RED)
+            val initialFirstInstance = nativeInstance(frames[0])
             assertTrue("Unrelated basemap must remain in flight to exercise source-local readiness",
                 transport.basemapRequests.get() > 0)
             assertTrue("Synthetic raster must actually be requested", gates[0].requests.get() > 0)
@@ -397,6 +486,7 @@ class RadarRasterContinuityTest {
             assertTrue("Delayed target must have a real native tile request", gates[1].requests.get() > 0)
             gates[1].release.countDown()
             val green = awaitColor("replacement", Marker.GREEN, Marker.RED)
+            val initialSecondInstance = nativeInstance(frames[1])
             val greenStamp = stamp()
             assertTrue("Ready replacement must update the displayed time", greenStamp != redStamp)
             assertTrue("Readiness must replace, rather than leave, outgoing pixels", green.fraction(Marker.RED) < .01)
@@ -413,6 +503,8 @@ class RadarRasterContinuityTest {
             assertTrue("Cached forward must restore the painted time", stamp() == greenStamp)
             assertTrue("Cached frame round trip must not require fresh tile downloads",
                 gates.take(2).sumOf { it.requests.get() } == warmRequests)
+            assertTrue("Warm cached frames must retain their native identities",
+                nativeInstance(frames[0]) == initialFirstInstance && nativeInstance(frames[1]) == initialSecondInstance)
 
             // Exercise the real camera callbacks under a permanently incomplete basemap.
             // The tiny move keeps the same geographic tile cover. Production may retire
@@ -424,6 +516,7 @@ class RadarRasterContinuityTest {
             val panIdleListener = MapLibreMap.OnCameraIdleListener { panIdle.countDown() }
             val beforeCover = AtomicReference<List<Int>>()
             val panAction = action("same-cover-pan")
+                .put("firstInstanceBefore", initialFirstInstance).put("secondInstanceBefore", initialSecondInstance)
             try {
                 instrumentation.runOnMainSync {
                     val map = requireNotNull(nativeMap.get())
@@ -452,24 +545,35 @@ class RadarRasterContinuityTest {
             }
             seek(0)
             awaitColor("same-cover-pan-return", Marker.RED, Marker.GREEN)
+            val panFirstInstance = nativeInstance(frames[0])
+            assertTrue("Pan-retired A must use a fresh native identity", panFirstInstance != initialFirstInstance)
+            assertRetired(initialFirstInstance)
+            assertRetired(initialSecondInstance)
             assertTrue("Cached return after pan must restore painted time", stamp() == redStamp)
             seek(1)
             awaitColor("same-cover-pan-forward", Marker.GREEN, Marker.RED)
+            val panSecondInstance = nativeInstance(frames[1])
+            assertTrue("Pan-retired B must use a fresh native identity", panSecondInstance != initialSecondInstance)
+            assertTrue("Pan-recreated sources must each emit their own EndParse",
+                (sourceParses["$panFirstInstance-source"]?.get() ?: 0) > 0 &&
+                    (sourceParses["$panSecondInstance-source"]?.get() ?: 0) > 0)
+            panAction.put("firstInstanceAfter", panFirstInstance).put("secondInstanceAfter", panSecondInstance)
             assertTrue("Cached forward after pan must restore painted time", stamp() == greenStamp)
 
             // Clear only the disposable fixture's ambient HTTP cache, before memory trim,
             // so A's next load must cross the controlled transport rather than disk cache.
             // Its decoded native source remains warm until the real registered callback.
             clearFixtureAmbientCache("clear-test-ambient-cache", greenStamp)
-            val firstSource = "wx-${frames[0].key}-source"
-            val secondSource = "wx-${frames[1].key}-source"
+            val firstSource = "$panFirstInstance-source"
+            val secondSource = "$panSecondInstance-source"
             val firstRequestsBeforeTrim = gates[0].requests.get()
-            val firstParsesBeforeTrim = sourceParses[firstSource]?.get() ?: 0
             val reloadRelease = gates[0].blockAgain()
             val trimAction = action("application-memory-trim")
                 .put("level", ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW)
                 .put("firstRequestsBefore", firstRequestsBeforeTrim)
-                .put("firstParsesBefore", firstParsesBeforeTrim)
+                .put("firstInstanceBefore", panFirstInstance).put("secondInstanceBefore", panSecondInstance)
+                .put("retiredFirstParses", sourceParses[firstSource]?.get() ?: 0)
+                .put("firstParsesBefore", 0)
             instrumentation.runOnMainSync {
                 val style = requireNotNull(nativeMap.get().style)
                 assertTrue("A must have a hidden cached source before memory pressure", style.getSource(firstSource) != null)
@@ -483,19 +587,30 @@ class RadarRasterContinuityTest {
             retain("memory-trim-visible-frame", Marker.GREEN, green, 350, Marker.RED, greenStamp)
             seek(0)
             retain("memory-trim-blocked-reload", Marker.GREEN, green, 1_250, Marker.RED, greenStamp)
+            val reloadedFirstInstance = nativeInstance(frames[0])
+            val reloadedFirstSource = "$reloadedFirstInstance-source"
+            assertTrue("Memory-evicted A must have a fresh native identity", reloadedFirstInstance != panFirstInstance)
+            assertRetired(panFirstInstance)
             assertTrue("Evicted A must issue a real new tile request", gates[0].requests.get() > firstRequestsBeforeTrim)
             assertTrue("Blocked A must not claim fresh parse completion",
-                (sourceParses[firstSource]?.get() ?: 0) == firstParsesBeforeTrim)
+                (sourceParses[reloadedFirstSource]?.get() ?: 0) == 0)
             trimAction.put("firstRequestsBlocked", gates[0].requests.get())
-                .put("firstParsesBlocked", sourceParses[firstSource]?.get() ?: 0)
+                .put("firstInstanceAfter", reloadedFirstInstance)
+                .put("firstParsesBlocked", sourceParses[reloadedFirstSource]?.get() ?: 0)
             reloadRelease.countDown()
-            awaitColor("memory-trim-reloaded", Marker.RED, Marker.GREEN)
+            awaitColor("memory-trim-reloaded", Marker.RED, Marker.GREEN, requiredParsedSource = reloadedFirstSource)
             assertTrue("Reloaded A must have a new native EndParse",
-                (sourceParses[firstSource]?.get() ?: 0) > firstParsesBeforeTrim)
+                (sourceParses[reloadedFirstSource]?.get() ?: 0) > 0)
             assertTrue("Reloaded A must restore its painted timestamp", stamp() == redStamp)
-            trimAction.put("firstParsesReady", sourceParses[firstSource]?.get() ?: 0)
+            trimAction.put("firstParsesReady", sourceParses[reloadedFirstSource]?.get() ?: 0)
+            assertRetired(panSecondInstance)
             seek(1)
             awaitColor("memory-trim-return-visible", Marker.GREEN, Marker.RED)
+            val reloadedSecondInstance = nativeInstance(frames[1])
+            assertTrue("Memory-retired B must use a fresh native identity", reloadedSecondInstance != panSecondInstance)
+            assertTrue("Recreated B must emit its own native EndParse",
+                (sourceParses["$reloadedSecondInstance-source"]?.get() ?: 0) > 0)
+            trimAction.put("secondInstanceAfter", reloadedSecondInstance)
             assertTrue("Returning to B after memory trim restores painted time", stamp() == greenStamp)
 
             if (overlay == "radar") {
@@ -504,41 +619,117 @@ class RadarRasterContinuityTest {
                 // through that path, rather than keeping obsolete parsed-tile evidence.
                 clearFixtureAmbientCache("clear-test-cache-before-empty", greenStamp)
                 val beforeEmptyRequests = gates[1].requests.get()
-                val beforeEmptyParses = sourceParses[secondSource]?.get() ?: 0
                 val emptyReloadRelease = gates[1].blockAgain()
                 val emptyAction = action("memory-trim-empty-selection")
-                    .put("requestsBefore", beforeEmptyRequests).put("parsesBefore", beforeEmptyParses)
+                    .put("requestsBefore", beforeEmptyRequests).put("parsesBefore", 0)
+                    .put("instanceBefore", reloadedSecondInstance)
+                    .put("retiredParses", sourceParses["$reloadedSecondInstance-source"]?.get() ?: 0)
+                snapshotNative("before-memory-trim-empty-selection")
                 instrumentation.runOnMainSync { dispatchMemoryTrim() }
+                snapshotNative("after-memory-trim-before-empty-selection")
                 compose.runOnIdle { session.frames = RadarFrames(emptyList()) }
                 compose.waitUntil(5_000) {
                     var removed = false
                     instrumentation.runOnMainSync {
-                        removed = requireNotNull(nativeMap.get().style).getSource(secondSource) == null
+                        removed = requireNotNull(nativeMap.get().style).getSource("$reloadedSecondInstance-source") == null
                     }
                     removed
                 }
+                snapshotNative("empty-selection-source-removed")
                 compose.runOnIdle { session.frames = RadarFrames(frames, backdrop) }
+                snapshotNative("empty-selection-restored")
                 compose.waitUntil(5_000) { gates[1].requests.get() > beforeEmptyRequests }
+                val emptyReloadInstance = nativeInstance(frames[1])
+                val emptyReloadSource = "$emptyReloadInstance-source"
+                assertTrue("Empty selection must recreate B with a fresh native identity",
+                    emptyReloadInstance != reloadedSecondInstance)
+                assertRetired(reloadedSecondInstance)
+                emptyAction.put("instanceAfter", emptyReloadInstance)
+                snapshotNative("empty-selection-reload-requested")
                 repeat(5) {
                     val empty = capture("empty-selection-blocked-reload")
                     assertTrue("Explicitly empty selection must not revive old weather before reload",
                         Marker.entries.all { empty.fraction(it) < .01 })
                     instrumentation.runOnMainSync {
                         val layer = requireNotNull(nativeMap.get().style)
-                            .getLayerAs<RasterLayer>("wx-${frames[1].key}")
+                            .getLayerAs<RasterLayer>(emptyReloadInstance)
                         assertTrue("Reloaded source must stay staged until its actual tiles parse",
                             layer != null && requireNotNull(layer.rasterOpacity.value) < .01f)
                     }
                     assertTrue("Blocked empty-selection reload must not claim a new EndParse",
-                        (sourceParses[secondSource]?.get() ?: 0) == beforeEmptyParses)
+                        (sourceParses[emptyReloadSource]?.get() ?: 0) == 0)
                 }
                 emptyAction.put("requestsBlocked", gates[1].requests.get())
+                    .put("parsesBlocked", sourceParses[emptyReloadSource]?.get() ?: 0)
+                snapshotNative("empty-selection-blocked")
                 emptyReloadRelease.countDown()
-                awaitColor("empty-selection-reloaded", Marker.GREEN)
+                awaitColor("empty-selection-reloaded", Marker.GREEN, requiredParsedSource = emptyReloadSource)
                 assertTrue("Explicit empty-selection reload requires new native parse evidence",
-                    (sourceParses[secondSource]?.get() ?: 0) > beforeEmptyParses)
+                    (sourceParses[emptyReloadSource]?.get() ?: 0) > 0)
                 assertTrue("Completed reload restores its displayed time", stamp() == greenStamp)
-                emptyAction.put("parsesReady", sourceParses[secondSource]?.get() ?: 0)
+                emptyAction.put("parsesReady", sourceParses[emptyReloadSource]?.get() ?: 0)
+                snapshotNative("empty-selection-ready")
+
+                // The normal Compose path above proves application wiring. These direct
+                // calls to that same attached production controller additionally force a
+                // remove/re-add sequence in one UI turn, without a timing-dependent pause
+                // that could let MapLibre render the empty intermediate style. HTTP cache
+                // reuse is allowed; every final fresh native source still needs EndParse.
+                val owner = requireNotNull(nativeController)
+                val show = owner.javaClass.getDeclaredMethod("show", String::class.java,
+                    RadarFrame::class.java, RadarFrame::class.java).apply { isAccessible = true }
+                val rapidIds = mutableSetOf(emptyReloadInstance)
+                repeat(3) { cycle ->
+                    val rapidAction = action("rapid-empty-restore-$cycle")
+                    val retired = mutableListOf<String>()
+                    val created = mutableListOf<String>()
+                    instrumentation.runOnMainSync {
+                        val previous = nativeInstance(frames[1])
+                        retired.add(previous)
+                        dispatchMemoryTrim()
+                        show.invoke(owner, server, null, null)
+                        assertRetired(previous)
+                        snapshotNative("rapid-empty-$cycle")
+                        show.invoke(owner, server, frames[1], backdrop)
+                        val replacement = nativeInstance(frames[1])
+                        assertTrue("Each same-turn restoration needs a never-reused native identity",
+                            rapidIds.add(replacement))
+                        created.add(replacement)
+                        snapshotNative("rapid-restored-$cycle")
+                    }
+                    val finalInstance = created.last()
+                    val finalSource = "$finalInstance-source"
+                    rapidAction.put("retiredInstances", JSONArray(retired)).put("createdInstances", JSONArray(created))
+                    retired.forEach(::assertRetired)
+                    // The compositor may still show the previous green image during this
+                    // same-color reset. A green screenshot alone cannot prove the new
+                    // source committed: require its own parse and painted-layer identity.
+                    compose.waitUntil(5_000) {
+                        val sampled = capture("rapid-empty-restored-$cycle-staging")
+                        if (sampled.fraction(Marker.GREEN) >= .65)
+                            assertComposite(sampled, "rapid-empty-restored-$cycle-staging", listOf(Marker.GREEN))
+                        else assertTrue("Explicit rapid reset may show only clear or exact green weather",
+                            sampled.clearFraction >= .98)
+                        var committed = false
+                        instrumentation.runOnMainSync {
+                            val layer = requireNotNull(nativeMap.get().style).getLayerAs<RasterLayer>(finalInstance)
+                            val parsed = (sourceParses[finalSource]?.get() ?: 0) > 0
+                            if (requireNotNull(layer?.rasterOpacity?.value) >= .01f)
+                                assertTrue("Fresh rapid source cannot leave staging before its own EndParse", parsed)
+                            val painted = owner.javaClass.getDeclaredField("paintedLayers")
+                                .apply { isAccessible = true }.get(owner) as Set<*>
+                            committed = finalInstance in painted
+                            if (committed) assertTrue("Fresh rapid source cannot publish before its own EndParse", parsed)
+                        }
+                        committed
+                    }
+                    awaitColor("rapid-empty-restored-$cycle", Marker.GREEN, requiredParsedSource = finalSource)
+                    assertTrue("Rapid same-frame restoration must finish native parsing",
+                        (sourceParses[finalSource]?.get() ?: 0) > 0)
+                    assertTrue("Rapid same-frame restoration must restore the painted timestamp", stamp() == greenStamp)
+                    rapidAction.put("parsesReady", sourceParses[finalSource]?.get() ?: 0)
+                    snapshotNative("rapid-empty-ready-$cycle")
+                }
             }
 
             seek(2)
@@ -560,6 +751,7 @@ class RadarRasterContinuityTest {
         } catch (error: Throwable) {
             outcome = "failed"
             failure = error.toString()
+            runCatching { snapshotNative("failure") }
             if (crop != null) runCatching { capture("failure", save = true) }
             throw error
         } finally {
@@ -588,8 +780,26 @@ class RadarRasterContinuityTest {
                 .put("crop", crop?.let { JSONArray(listOf(it.left, it.top, it.right, it.bottom)) })
                 .put("requests", transport.requestEvidence()).put("tileEventsTotal", tileEventCount.get())
                 .put("tileEvents", JSONArray(tileEvents.toList())).put("actions", actions)
+                .put("nativeStates", nativeStates)
                 .put("samples", evidence).toString(2))
         }
+    }
+
+    private fun findNativeController(view: MapView): Any {
+        // Test-only access to the owner already attached by production NativeRadarMap.
+        // These two field names are pinned to MapLibre 11.8; do not reflect into Android
+        // framework internals or construct a second controller with different wiring.
+        val receiver = requireNotNull(MapView::class.java.getDeclaredField("mapChangeReceiver")
+            .apply { isAccessible = true }.get(view))
+        val listeners = receiver.javaClass.getDeclaredField("onTileActionList")
+            .apply { isAccessible = true }.get(receiver) as List<*>
+        val owners = listeners.filterNotNull().flatMap { listener ->
+            listener.javaClass.declaredFields.filter {
+                it.type.name == "zone.disinfo.wx.ui.NativeRadarController"
+            }.mapNotNull { it.apply { isAccessible = true }.get(listener) }
+        }.distinct()
+        check(owners.size == 1) { "Expected one attached production radar controller, found ${owners.size}" }
+        return owners.single()
     }
 
     private fun findMaps(view: View?): List<MapView> = when (view) {
@@ -639,10 +849,12 @@ class RadarRasterContinuityTest {
         }
     }
 
-    private data class Counts(val pixels: Int, val counts: Map<Marker, Int>, val composites: Map<Marker, Int>) {
+    private data class Counts(val pixels: Int, val counts: Map<Marker, Int>, val composites: Map<Marker, Int>,
+                              val clearPixels: Int) {
+        val clearFraction get() = clearPixels.toDouble() / pixels
         fun fraction(marker: Marker) = (counts[marker] ?: 0).toDouble() / pixels
         fun compositeFraction(marker: Marker) = (composites[marker] ?: 0).toDouble() / pixels
-        fun json() = JSONObject().put("pixels", pixels).apply {
+        fun json() = JSONObject().put("pixels", pixels).put("clearComposite", clearFraction).apply {
             Marker.entries.forEach {
                 put(it.name.lowercase(), fraction(it))
                 put("${it.name.lowercase()}Composite", compositeFraction(it))
@@ -657,7 +869,8 @@ class RadarRasterContinuityTest {
                     kotlin.math.abs(Color.blue(a) - Color.blue(b)) <= tolerance
                 return Counts(pixels.size, Marker.entries.associateWith { marker -> pixels.count(marker::matches) },
                     expected.mapValues { (_, colors) -> pixels.count { pixel -> colors.any { near(pixel, it) } ||
-                        (backdrop != null && near(pixel, backdrop)) } })
+                        (backdrop != null && near(pixel, backdrop)) } },
+                    pixels.count { near(it, Color.rgb(16, 20, 24)) })
             }
         }
     }
