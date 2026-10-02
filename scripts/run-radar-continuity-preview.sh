@@ -7,6 +7,12 @@ output=${1:-app/build/outputs/radar-layers-preview/continuity}
 shard_count=${WX_LAYER_SHARD_COUNT:-1}
 shard_index=${WX_LAYER_SHARD_INDEX:-0}
 mkdir -p "$output"
+# Reset every raw result before setup. A stale report from an interrupted local rerun
+# can never pair with successful status files from the previous invocation.
+rm -f "$output/continuity-analysis.json" "$output/continuity-gate.json" || exit 2
+printf '2\n' > "$output/continuity-acquisition-status.txt"
+printf '2\n' > "$output/continuity-analysis-status.txt"
+printf '2\n' > "$output/continuity-status.txt"
 fail_setup() {
  local reason=$1
  printf 'Native continuity setup failed: %s\n' "$reason" >&2
@@ -111,8 +117,12 @@ expected = 'zone.disinfo.wx.macrobenchmark.RadarLayersPreviewTest#allLayersConti
 assert set(results) == {expected} and results[expected]['code'] == 0, results
 PY
 done
+printf '%s\n' "$status" > "$output/continuity-acquisition-status.txt"
 "$analysis_python" scripts/analyze-radar-continuity.py "$output" --output "$output/continuity-analysis.json" \
- --shard-count "$shard_count" --shard-index "$shard_index" || status=1
+ --shard-count "$shard_count" --shard-index "$shard_index"
+analysis_status=$?
+printf '%s\n' "$analysis_status" > "$output/continuity-analysis-status.txt"
+[[ "$analysis_status" -eq 0 ]] || status=1
 [[ -s "$output/continuity-analysis.json" ]] || fail_setup "Analyzer did not produce a report; inspect analysis and capture logs"
 printf '%s\n' "$status" > "$output/continuity-status.txt"
 exit "$status"

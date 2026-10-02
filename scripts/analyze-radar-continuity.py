@@ -11,7 +11,8 @@ Input: recursively discovered *.capture.json sidecars, schemaVersion=1. elapsedM
 on events is relative to startElapsedRealtimeMs. mapRegion is an unobscured native
 map-only rectangle in full-display pixels. The recorder must not scale its video.
 The capture starts paused and settled, then includes two >=4s plays, each with at
-least three distinct frame_stamp values, and four paired, verified scrubs.
+least three distinct painted stamps from interior observations and valid play
+boundaries (never post-seek samples), and four paired, verified scrubs.
 
 Output: one aggregate JSON, per-capture compact columnar JSON + CSV containing
 EVERY frame, and native-resolution before/failure/after strips. Failed and
@@ -99,8 +100,8 @@ def validate_events(data):
     if not isinstance(events, list):
         return [problem("events_missing", "events must be an array")], [], []
     end_ms = data["endElapsedRealtimeMs"] - data["startElapsedRealtimeMs"]
-    previous, play, scrub = -1, None, None
-    for event in events:
+    previous, play, scrub, play_index = -1, None, None, None
+    for event_index, event in enumerate(events):
         if not isinstance(event, dict) or not finite(event.get("elapsedMs")):
             errors.append(problem("event_timing", "Every event needs a finite elapsedMs"))
             continue
@@ -113,23 +114,38 @@ def validate_events(data):
             if play is not None:
                 errors.append(problem("unpaired_play", "play_start before previous play_end"))
             play = event
+            play_index = event_index
         elif kind == "play_end":
             if play is None:
                 errors.append(problem("unpaired_play", "play_end without play_start"))
             else:
-                stamps = [e.get("stamp") for e in events if isinstance(e, dict)
-                          and e.get("type") == "frame_stamp" and finite(e.get("elapsedMs"))
-                          and play["elapsedMs"] <= e["elapsedMs"] <= now and e.get("stamp")]
+                # These boundary stamps are actual painted labels, read by the
+                # recorder before Play and before the first physical seek (or
+                # after Pause for an uninterrupted play). A later play_end follows
+                # scrub-to-pause in rounds 1/2 and must NEVER contribute its target
+                # stamp. Use event order as well as time to exclude even same-ms
+                # post-seek observations. Sparse interior polling is not a reason
+                # to discard valid painted boundary evidence or lower min-three.
+                end_index = next((i for i in range(play_index + 1, event_index)
+                                  if isinstance(events[i], dict) and events[i].get("type") == "scrub_start"
+                                  and finite(events[i].get("elapsedMs"))), event_index)
+                active_end = events[end_index]
+                samples = [play] + [e for e in events[play_index + 1:end_index]
+                                    if isinstance(e, dict) and e.get("type") == "frame_stamp"
+                                    and finite(e.get("elapsedMs"))
+                                    and play["elapsedMs"] <= e["elapsedMs"] <= active_end["elapsedMs"]] + [active_end]
+                stamps = [e["stamp"] for e in samples if e.get("stamp")]
                 distinct = len(set(map(str, stamps)))
                 item = {"startMs": play["elapsedMs"], "endMs": now,
                         "durationMs": now - play["elapsedMs"], "distinctStamps": distinct,
-                        "activeEndMs": min([e["elapsedMs"] for e in events if isinstance(e, dict)
-                                            and e.get("type") == "scrub_start" and finite(e.get("elapsedMs"))
-                                            and play["elapsedMs"] <= e["elapsedMs"] <= now] or [now])}
+                        "activeEndMs": active_end["elapsedMs"],
+                        "paintedStampSamples": [{"type": e["type"], "elapsedMs": e["elapsedMs"], "stamp": e["stamp"]}
+                                                for e in samples if e.get("stamp")]}
                 plays.append(item)
                 if distinct < 3:
-                    errors.append(problem("play_stamps", "Each play needs three distinct frame_stamp observations"))
+                    errors.append(problem("play_stamps", "Each active play needs three distinct painted stamps including its valid start/end boundaries; post-seek stamps are excluded"))
                 play = None
+                play_index = None
         elif kind == "scrub_start":
             if scrub is not None:
                 errors.append(problem("unpaired_scrub", "scrub_start before previous scrub_end"))
