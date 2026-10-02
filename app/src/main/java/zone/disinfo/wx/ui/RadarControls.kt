@@ -35,7 +35,7 @@ internal fun Modifier.radarSurface(shape: Shape = RoundedCornerShape(20.dp)): Mo
     val colors = MaterialTheme.colorScheme
     return shadow(6.dp, shape, ambientColor = Color.Black.copy(alpha = .10f),
         spotColor = Color.Black.copy(alpha = .08f))
-        .clip(shape).background(colors.surface.copy(alpha = .91f))
+        .clip(shape).background(colors.surface.copy(alpha = .91f), shape)
         .border(.5.dp, colors.onSurface.copy(alpha = .10f), shape)
 }
 
@@ -134,7 +134,7 @@ private fun RadarPlaybackButton(
     val ink = MaterialTheme.colorScheme.onSurface
     val paper = MaterialTheme.colorScheme.surface
     Box(modifier.size(44.dp).clip(CircleShape)
-        .background(ink.copy(alpha = if (enabled) .94f else .32f))
+        .background(ink.copy(alpha = if (enabled) .94f else .32f), CircleShape)
         .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
         .semantics {
             contentDescription = if (playing && enabled) "Pause animation" else "Play animation"

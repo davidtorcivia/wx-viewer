@@ -401,11 +401,12 @@ fun CompactRadarPanel(
     modifier: Modifier = Modifier,
     timeZone: String = ZoneId.systemDefault().id,
 ) {
+    val textExpansion = (LocalDensity.current.fontScale - 1f).coerceAtLeast(0f)
     RadarView(
         serverUrl,
         place,
         true,
-        modifier = modifier.fillMaxWidth().height(260.dp).clip(RoundedCornerShape(8.dp)),
+        modifier = modifier.fillMaxWidth().height(260.dp + 120.dp * textExpansion).clip(RoundedCornerShape(8.dp)),
         onExpand = onExpand,
         timeZone = timeZone,
     )
@@ -638,6 +639,8 @@ private fun RadarView(
     val paper = MaterialTheme.colorScheme.surface
     val density = LocalDensity.current
     var transportHeight by remember(compact) { mutableStateOf(if (compact) 48.dp else 113.dp) }
+    var compactTopHeight by remember(density.fontScale) { mutableStateOf(56.dp) }
+    var compactBottomHeight by remember(density.fontScale) { mutableStateOf(112.dp) }
     fun changeOverlay(layer: String) {
         session.noteTimelineCommand()
         linkPending = null
@@ -712,6 +715,7 @@ private fun RadarView(
                         fontSize = if (compact) 10.sp else 12.sp,
                         modifier =
                             Modifier.align(Alignment.TopCenter)
+                                .onSizeChanged { compactTopHeight = with(density) { it.height.toDp() }.coerceAtLeast(56.dp) }
                                 .padding(start = 8.dp, top = 8.dp, end = 60.dp)
                                 .background(paper.copy(alpha = .91f), RoundedCornerShape(8.dp))
                                 .padding(8.dp, 5.dp)
@@ -727,6 +731,7 @@ private fun RadarView(
                     fontSize = if (compact) 10.sp else 12.sp,
                     modifier =
                         Modifier.align(Alignment.TopCenter)
+                            .onSizeChanged { compactTopHeight = with(density) { it.height.toDp() }.coerceAtLeast(56.dp) }
                             .padding(start = 8.dp, top = 8.dp, end = 60.dp)
                             .background(paper.copy(alpha = .91f), RoundedCornerShape(8.dp))
                             .padding(8.dp, 5.dp)
@@ -808,8 +813,9 @@ private fun RadarView(
                 true,
                 { changeOverlay(it) },
                 Modifier.align(Alignment.BottomCenter)
+                    .onSizeChanged { compactBottomHeight = with(density) { it.height.toDp() } }
                     .padding(start = 8.dp, end = 8.dp, bottom = transportHeight + 16.dp)
-                    .fillMaxWidth(),
+                    .fillMaxWidth().testTag("radar_compact_legend"),
             )
         val stamp = session.savedView?.takeIf { session.showingSavedView }
             ?.let { radarClock(it.frameTime, timeZone, true) }
@@ -872,16 +878,24 @@ private fun RadarView(
             )
         }
         (if (session.showingSavedView) null else mapError ?: error)?.let { problem ->
-            Row(
-                Modifier.align(Alignment.Center)
-                    .background(paper.copy(alpha = .94f), RoundedCornerShape(14.dp))
-                    .padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            // The compact map has controls at both ends. Center an error in the
+            // remaining map area, rather than placing it over the lower legend.
+            Box(
+                Modifier.fillMaxSize().then(if (compact)
+                    Modifier.padding(top = compactTopHeight + 8.dp, bottom = compactBottomHeight + 8.dp)
+                    else Modifier),
+                contentAlignment = Alignment.Center,
             ) {
-                Text(problem, color = ink, fontSize = 12.sp, modifier = Modifier.weight(1f, false))
-                TextButton(onClick = { session.invalidateMetadata(); refresh++; mapError = null },
-                    modifier = Modifier.heightIn(min = 44.dp)) {
-                    Text("Retry", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Row(
+                    Modifier.background(paper.copy(alpha = .94f), RoundedCornerShape(14.dp))
+                        .testTag("radar_error").padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(problem, color = ink, fontSize = 12.sp, modifier = Modifier.weight(1f, false))
+                    TextButton(onClick = { session.invalidateMetadata(); refresh++; mapError = null },
+                        modifier = Modifier.heightIn(min = 44.dp)) {
+                        Text("Retry", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
         }
@@ -1712,26 +1726,8 @@ private class NativeRadarController(
             for (frame in visible) {
                 val id = "wx-${frame.key}"
                 if (s.getLayer(id) == null) {
-                    val tileSet = radarTileSet(base, frame)
-                    s.addSource(
-                        RasterSource(
-                            "$id-source",
-                            tileSet,
-                            if (frame.field != null) frame.tile
-                            else if (frame.satellite) 256 else 512,
-                        )
-                    )
-                    val layer =
-                        RasterLayer(id, "$id-source")
-                            .withProperties(
-                                rasterOpacity(fieldOpacity(frame)),
-                                rasterFadeDuration(0f),
-                                rasterBrightnessMax(
-                                    if (frame.fieldName == "cloud" && !styleUrl.endsWith("dark"))
-                                        .6f
-                                    else 1f
-                                ),
-                            )
+                    s.addSource(weatherRasterSource(base, frame))
+                    val layer = weatherRasterLayer(frame, !styleUrl.endsWith("dark"))
                     val firstLabel =
                         s.layers.firstOrNull { it is SymbolLayer }?.id ?: s.layers.last().id
                     s.addLayerBelow(layer, firstLabel)
@@ -1916,11 +1912,13 @@ private class NativeRadarController(
         val server = base
         val generation = DisplayCache.generation
         val originalStyle = loaded.json
-        val visible =
+        val visibleFrames =
             listOfNotNull(backdrop, frame.takeIf { it.leadMinutes == 0 })
-                .map { "wx-${it.key}" }
-                .toSet()
-        val label = loaded.layers.firstOrNull { it is SymbolLayer }?.id
+                .distinctBy { it.key }
+        val lightMap = !styleUrl.endsWith("dark")
+        // Runtime number labels are stripped with the other wx overlays. Insert
+        // rebuilt weather only relative to a label retained in the base style.
+        val label = loaded.layers.firstOrNull { it is SymbolLayer && !it.id.startsWith("wx-") }?.id
         // NativeMapView renders in density-independent pixels (verified against SDK 11.8).
         // Match that camera extent; a physical-pixel size at pixelRatio=1 would fetch a wider area.
         val density = view.resources.displayMetrics.density.toDouble()
@@ -1937,7 +1935,7 @@ private class NativeRadarController(
         snapshotJob = scope.launch {
             try {
                 val stripped =
-                    withContext(Dispatchers.Default) { radarSnapshotStyle(originalStyle, visible) }
+                    withContext(Dispatchers.Default) { radarSnapshotStyle(originalStyle, emptySet()) }
                 if (
                     disposed ||
                         base != server ||
@@ -1946,6 +1944,14 @@ private class NativeRadarController(
                 )
                     return@launch
                 val builder = Style.Builder()
+                // getJson() retains the original loaded style, not runtime weather
+                // sources/layers. Rebuild the viewed rasters with fresh native peers.
+                for (visibleFrame in visibleFrames) {
+                    builder.withSource(weatherRasterSource(server, visibleFrame))
+                    val raster = weatherRasterLayer(visibleFrame, lightMap)
+                    if (label != null) builder.withLayerBelow(raster, label)
+                    else builder.withLayer(raster)
+                }
                 if (image != null) {
                     val b = image.bounds
                     builder.withSource(
@@ -2003,6 +2009,15 @@ private class NativeRadarController(
             }
         }
     }
+
+    private fun weatherRasterSource(server: String, frame: RadarFrame) =
+        RasterSource("wx-${frame.key}-source", radarTileSet(server, frame),
+            if (frame.field != null) frame.tile else if (frame.satellite) 256 else 512)
+
+    private fun weatherRasterLayer(frame: RadarFrame, light: Boolean) =
+        RasterLayer("wx-${frame.key}", "wx-${frame.key}-source").withProperties(
+            rasterOpacity(fieldOpacity(frame)), rasterFadeDuration(0f),
+            rasterBrightnessMax(if (frame.fieldName == "cloud" && light) .6f else 1f))
 
     private fun fieldOpacity(frame: RadarFrame): Float =
         when (frame.fieldName) {

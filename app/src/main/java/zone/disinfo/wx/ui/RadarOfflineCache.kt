@@ -44,6 +44,13 @@ internal data class SavedRadarView(
     val bounds: RadarBounds,
 )
 
+/** Empty native renders are transparent; a dry map still has its painted basemap. */
+internal fun radarMapHasVisiblePixels(bitmap: Bitmap): Boolean {
+    val pixels = IntArray(bitmap.width * bitmap.height)
+    bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+    return pixels.any { it ushr 24 != 0 }
+}
+
 /** A flattened last-viewed map, excluding every alert, inspection and live vector layer. */
 internal object RadarViewCache {
     private fun pointer(sessionKey: String, overlay: String, range: String) =
@@ -84,6 +91,9 @@ internal object RadarViewCache {
                         return@withContext null
                     val bitmap =
                         BitmapFactory.decodeByteArray(png, 0, png.size) ?: return@withContext null
+                    // Earlier builds could persist the empty snapshot bootstrap. Do not label
+                    // those valid PNG files as saved maps, even before a fresh capture succeeds.
+                    if (!radarMapHasVisiblePixels(bitmap)) return@withContext null
                     SavedRadarView(bitmap, image.fetchedAt, frameTime, scanTime, lead, bounds)
                 }
             } catch (_: Exception) {
