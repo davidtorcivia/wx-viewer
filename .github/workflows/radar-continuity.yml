@@ -73,6 +73,12 @@ jobs:
           name: native-radar-comparison-packages
       - name: Verify exact package bytes
         run: sha256sum --check continuity-build/apk-sha256.txt
+      - name: Install native-video decoder
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes ffmpeg
+          ffmpeg -version
+          ffprobe -version
       - name: Enable temporary runner KVM access
         run: |
           test -c /dev/kvm || exit 1

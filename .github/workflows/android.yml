@@ -129,6 +129,13 @@ jobs:
           name: android-validation-packages
       - name: Verify these are the same build's exact APKs
         run: sha256sum --check apk-sha256.txt
+      - name: Install native-video decoder for layer lanes
+        if: startsWith(matrix.lane, 'layers-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes ffmpeg
+          ffmpeg -version
+          ffprobe -version
       - name: Enable temporary runner KVM access
         shell: bash
         run: |
